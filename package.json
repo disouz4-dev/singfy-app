@@ -1,0 +1,23 @@
+{
+  "name": "singfy-app",
+  "version": "1.0.0",
+  "description": "Setlist e cifra para shows com auto-roll e transposição",
+  "private": true,
+  "scripts": {
+    "version:patch": "npm version patch",
+    "version:minor": "npm version minor",
+    "version:major": "npm version major",
+    "release": "git push origin main --tags",
+    "deploy": "firebase deploy",
+    "dev:functions": "cd functions && npm install && firebase emulators:start --only functions",
+    "dev:hosting": "firebase serve --only hosting"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/disouz4-dev/singfy-app.git"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}
