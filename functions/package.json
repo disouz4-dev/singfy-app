@@ -1,0 +1,13 @@
+{
+  "name": "singfy-functions",
+  "description": "Proxy para buscar cifras no Cifra Club",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "firebase-functions": "^5.1.0",
+    "cheerio": "^1.0.0"
+  },
+  "private": true
+}

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1a1a2e">
+  <meta name="description" content="Singfy - Setlist e cifra para shows com auto-roll e transposição">
+  <title>Singfy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="manifest" href="manifest.json">
+</head>
+<body>
+  <div id="app">
+    <!-- Tela de Busca / Home -->
+    <section id="screen-search" class="screen active" role="main">
+      <header class="topbar">
+        <h1 class="logo">Singfy</h1>
+        <button id="btn-setlist" class="icon-btn" aria-label="Ver setlist" title="Setlist (S)">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 3h18v18H3z"/>
+            <path d="M7 7h10"/>
+            <path d="M7 12h10"/>
+            <path d="M7 17h7"/>
+          </svg>
+          <span class="badge" id="setlist-badge" hidden>0</span>
+        </button>
+      </header>
+      
+      <main class="search-main">
+        <form id="search-form" class="search-form" autocomplete="off">
+          <div class="input-group">
+            <label for="input-artist" class="visually-hidden">Artista</label>
+            <input type="text" id="input-artist" name="artist" placeholder="Artista" required autocomplete="off">
+          </div>
+          <div class="input-group">
+            <label for="input-song" class="visually-hidden">Música</label>
+            <input type="text" id="input-song" name="song" placeholder="Música" required autocomplete="off">
+          </div>
+          <button type="submit" class="btn btn-primary btn-block" id="btn-search">
+            <svg class="spinner" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" hidden>
+              <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
+              <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round">
+                <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
+              </path>
+            </svg>
+            <span class="btn-text">Buscar cifra</span>
+          </button>
+        </form>
+        
+        <div id="search-result" class="search-result hidden" aria-live="polite">
+          <!-- Preenchido via JS -->
+        </div>
+        
+        <div id="search-error" class="error-message hidden" role="alert"></div>
+      </main>
+      
+      <footer class="bottombar">
+        <kbd>Enter</kbd> busca &nbsp;·&nbsp; <kbd>S</kbd> abre setlist
+      </footer>
+    </section>
+    
+    <!-- Tela de Setlist -->
+    <section id="screen-setlist" class="screen" role="main" aria-label="Setlist">
+      <header class="topbar">
+        <button id="btn-back-search" class="icon-btn" aria-label="Voltar à busca">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+        </button>
+        <h1 class="logo">Setlist</h1>
+        <div class="topbar-actions">
+          <button id="btn-clear-setlist" class="icon-btn danger" aria-label="Limpar setlist" title="Limpar tudo">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+          </button>
+          <button id="btn-start-show" class="btn btn-primary" aria-label="Iniciar show">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>
+            <span>Iniciar</span>
+          </button>
+        </div>
+      </header>
+      
+      <main class="setlist-main">
+        <ul id="setlist-list" class="setlist-list" role="list" aria-label="Músicas do show">
+          <!-- Itens inseridos via JS -->
+        </ul>
+        
+        <div id="setlist-empty" class="empty-state hidden">
+          <svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3">
+            <path d="M3 3h18v18H3z"/>
+            <path d="M7 7h10"/>
+            <path d="M7 12h10"/>
+            <path d="M7 17h7"/>
+          </svg>
+          <p>Nenhuma música no setlist</p>
+          <span>Busque uma cifra e adicione</span>
+        </div>
+      </main>
+    </section>
+    
+    <!-- Tela de Show (Modo Apresentação) -->
+    <section id="screen-show" class="screen" role="main" aria-label="Modo show">
+      <!-- Barra superior auto-ocultável -->
+      <header id="show-topbar" class="show-topbar">
+        <div class="show-info">
+          <span id="show-current-position" class="position-badge">1 / 0</span>
+          <h2 id="show-song-title" class="song-title">—</h2>
+          <span id="show-song-artist" class="song-artist">—</span>
+        </div>
+        <div class="show-controls">
+          <button id="show-prev" class="icon-btn large" aria-label="Música anterior" title="Anterior (←)">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M19 18H5M12 5l-7 7 7 7"/>
+            </svg>
+          </button>
+          <button id="show-play-pause" class="btn btn-circle btn-large" aria-label="Play/Pause" title="Play/Pause (Espaço)">
+            <svg id="icon-play" viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>
+            <svg id="icon-pause" viewBox="0 0 24 24" width="28" height="28" fill="currentColor" hidden><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+          </button>
+          <button id="show-next" class="icon-btn large" aria-label="Próxima música" title="Próxima (→)">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M5 18h14M12 5l7 7-7 7"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+      
+      <!-- Área da cifra com rolagem -->
+      <main id="show-scroll-container" class="show-scroll-container" role="region" aria-label="Cifra da música" tabindex="0">
+        <div id="show-cifra-content" class="cifra-content">
+          <!-- Cifra renderizada aqui -->
+        </div>
+        
+        <!-- Indicador de progresso lateral -->
+        <div id="show-progress-bar" class="progress-bar" aria-hidden="true">
+          <div id="show-progress-fill" class="progress-fill"></div>
+        </div>
+      </main>
+      
+      <!-- Barra inferior de controles -->
+      <footer id="show-bottombar" class="show-bottombar">
+        <div class="control-group">
+          <label class="control-label">Velocidade</label>
+          <div class="speed-control">
+            <button id="speed-down" class="icon-btn" aria-label="Diminuir velocidade">−</button>
+            <span id="speed-value" class="speed-value">1.0x</span>
+            <button id="speed-up" class="icon-btn" aria-label="Aumentar velocidade">+</button>
+          </div>
+        </div>
+        <div class="control-group">
+          <label class="control-label">Microfone</label>
+          <button id="mic-toggle" class="btn btn-ghost mic-btn" aria-label="Ativar microfone" aria-pressed="false">
+            <svg class="mic-on" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="22"/>
+              <line x1="8" y1="22" x2="16" y2="22"/>
+            </svg>
+            <svg class="mic-off" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" hidden>
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="22"/>
+              <line x1="8" y1="22" x2="16" y2="22"/>
+              <line x1="4" y1="4" x2="20" y2="20"/>
+            </svg>
+            <span class="mic-label">Mic</span>
+          </button>
+        </div>
+        <div class="control-group">
+          <label class="control-label">Tom</label>
+          <div id="transpose-buttons" class="transpose-buttons" role="group" aria-label="Transposição"></div>
+        </div>
+        <button id="show-exit" class="btn btn-ghost" aria-label="Sair do modo show">Sair</button>
+      </footer>
+    </section>
+    
+    <!-- Toast notifications -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+  </div>
+  
+  <!-- Firebase Config (fornecido pelo usuário) -->
+  <script type="module">
+    // Configuração do Firebase - será injetada pelo build ou definida aqui
+    window.FIREBASE_CONFIG = {
+      apiKey: "AIzaSyCKqfm3Z5WYLLHI8KdaiM-FdagvkhUr6zY",
+      authDomain: "singfy-app.firebaseapp.com",
+      projectId: "singfy-app",
+      storageBucket: "singfy-app.firebasestorage.app",
+      messagingSenderId: "289312842255",
+      appId: "1:289312842255:web:2c5ced78adf763a541397a",
+      measurementId: "G-CVVMT8W0G7"
+    };
+  </script>
+  
+  <!-- Módulos da aplicação -->
+  <script type="module" src="js/parser.js"></script>
+  <script type="module" src="js/transpose.js"></script>
+  <script type="module" src="js/setlist.js"></script>
+  <script type="module" src="js/player.js"></script>
+  <script type="module" src="js/api.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

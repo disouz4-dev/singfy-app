@@ -1,0 +1,31 @@
+{
+  "name": "Singfy",
+  "short_name": "Singfy",
+  "description": "Setlist e cifra para shows com auto-roll e transposição",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d0d12",
+  "theme_color": "#1a1a2e",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%2300d4aa'/%3E%3Cpath d='M50 15a35 35 0 0 1 35 35c0 12-7 22-17 29-10-7-17-17-17-29A35 35 0 0 1 50 15z' fill='%230d0d12'/%3E%3C/svg%3E",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["music", "utilities"],
+  "shortcuts": [
+    {
+      "name": "Nova Busca",
+      "url": "/",
+      "description": "Buscar nova cifra"
+    },
+    {
+      "name": "Setlist",
+      "url": "/#setlist",
+      "description": "Ver setlist do show"
+    }
+  ]
+}
