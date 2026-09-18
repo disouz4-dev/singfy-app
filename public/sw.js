@@ -1,5 +1,5 @@
 // sw.js — Service Worker para Singfy (PWA offline)
-const CACHE_NAME = 'singfy-v47';
+const CACHE_NAME = 'singfy-v48';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

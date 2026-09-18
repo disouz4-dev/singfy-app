@@ -73,23 +73,45 @@ export function chordToDegree(chord, key) {
 }
 
 // Transpõe um acorde de um tom para outro mantendo qualidade e extensões
+// Transposição cromática: move a fundamental e o baixo pelo intervalo entre os
+// tons e mantém todo o resto do acorde (m, 7M, (9), sus4, °...). A versão
+// anterior, via campo harmônico, não transpunha tons menores nem tons com #
+// e perdia o baixo de acordes com barra (G/B -> D).
+const CHORD_RE = /^([A-G])([#b]?)(.*?)(?:\/([A-G])([#b]?))?$/;
+const FLAT_MAJOR_KEYS = new Set(["F", "A#", "D#", "G#", "C#"]);   // F Bb Eb Ab Db
+const FLAT_MINOR_KEYS = new Set(["D", "G", "C", "F", "A#", "D#"]); // Dm Gm Cm Fm Bbm Ebm
+const SHARPS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const FLATS = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
+
+function noteIndex(note) {
+  const ENHARMONIC = { "Db": "C#", "Eb": "D#", "Gb": "F#", "Ab": "G#", "Bb": "A#", "Cb": "B", "Fb": "E", "E#": "F", "B#": "C" };
+  return SHARPS.indexOf(ENHARMONIC[note] || note);
+}
+
+function keyRoot(key) {
+  const m = String(key || "").match(/^([A-G][#b]?)(m?)/);
+  return m ? { root: m[1], minor: m[2] === "m" } : null;
+}
+
 export function transposeChord(chord, fromKey, toKey) {
   if (!chord || !fromKey || !toKey) return chord;
-  
-  const degree = chordToDegree(chord, fromKey);
-  if (!degree) {
-    // Fallback: transposição cromática simples
-    return chromaticTranspose(chord, semitoneDistance(fromKey, toKey));
-  }
-  
-  const targetField = MAJOR_FIELD[toKey] || MINOR_NATURAL_FIELD[toKey];
-  if (!targetField) return chord;
-  
-  const targetBase = targetField[degree.toUpperCase()] || targetField[degree.toLowerCase()];
-  if (!targetBase) return chord;
-  
-  // Preserva extensões (7, 9, sus, add, /baixo)
-  return applyExtensions(targetBase, getExtensions(chord));
+  const from = keyRoot(fromKey), to = keyRoot(toKey);
+  if (!from || !to) return chord;
+  const semitones = (noteIndex(to.root) - noteIndex(from.root) + 12) % 12;
+  if (semitones === 0) return chord;
+
+  const m = chord.match(CHORD_RE);
+  if (!m) return chord;
+  const toIdx = noteIndex(to.root);
+  const useFlats = (to.minor ? FLAT_MINOR_KEYS : FLAT_MAJOR_KEYS).has(SHARPS[toIdx]);
+  const scale = useFlats ? FLATS : SHARPS;
+  const move = (note) => {
+    const i = noteIndex(note);
+    return i === -1 ? note : scale[(i + semitones) % 12];
+  };
+
+  const [, root, acc, quality, bass, bassAcc] = m;
+  return move(root + acc) + quality + (bass ? "/" + move(bass + bassAcc) : "");
 }
 
 // Transposição cromática pura (para acordes fora do campo)

@@ -418,12 +418,8 @@
   <!-- Módulos da aplicação -->
   <script type="module" src="js/auth.js?v=20260905"></script>
   <script type="module" src="js/session.js"></script>
-    <script type="module" src="js/parser.js?v=20260904"></script>
-    <script type="module" src="js/transpose.js?v=20260227"></script>
-    <script type="module" src="js/setlist.js?v=20260905"></script>
-    <script type="module" src="js/player.js?v=20260227"></script>
-    <script type="module" src="js/api.js?v=20260227"></script>
-    <script type="module" src="js/voicesync.js?v=20260227"></script>
-    <script type="module" src="js/app.js?v=20260912"></script>
+  <!-- Os demais módulos são importados pelo app.js (carregá-los aqui com outro
+       ?v= criava uma 2ª instância de cada um, ex.: dois SetlistManager) -->
+  <script type="module" src="js/app.js?v=20260918"></script>
 </body>
 </html>

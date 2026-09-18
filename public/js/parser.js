@@ -55,14 +55,14 @@ function normalizeChordName(name) {
 }
 
 function decodeHtmlEntities(str) {
+  // &amp; por último, para não decodificar duas vezes ("&amp;lt;" -> "&lt;")
   return String(str)
-    .replace(/&/g, "&")
-    .replace(/</g, "<")
-    .replace(/>/g, ">")
-    .replace(/"/g, "\"")
-    .replace(/&#0*39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#0*39;|&apos;/g, "'")
     .replace(/&nbsp;/g, " ")
-    .replace(/'/g, "'");
+    .replace(/&amp;/g, "&");
 }
 
 // Heurística: detecta tom a partir dos acordes das linhas
@@ -166,11 +166,11 @@ export function linesToHtml(lines, transposeMap = {}) {
 
 function escapeHtml(s) {
   return String(s)
-    .replace(/&/g, "&")
-    .replace(/</g, "<")
-    .replace(/>/g, ">")
-    .replace(/"/g, "\"")
-    .replace(/'/g, "'");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 const SECTION_WORDS = [

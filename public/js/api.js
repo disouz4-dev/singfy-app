@@ -73,18 +73,38 @@ export async function fetchSpotifyPlaylistTracks(playlistId) {
   let m;
   while ((m = pat.exec(text)) !== null) {
     const title = decodeEntities(stripTags(m[1])).trim();
-    const rawArtist = decodeEntities(stripTags(m[2])).trim();
+    // Remove o selo "E" (Explicit) que fica dentro do subtítulo — senão o
+    // artista vira "E Tame Impala" e a busca no Cifra Club falha.
+    const subtitle = m[2].replace(/<span[^>]*data-testid="tag"[^>]*>.*?<\/span>/gs, "");
+    const rawArtist = decodeEntities(stripTags(subtitle)).trim();
     if (!title) continue;
-    const artists = rawArtist.split(/\s*[,·]\s*/).filter(Boolean).join(", ");
-    tracks.push({ title, artist: artists || rawArtist });
+    const artists = rawArtist.split(/\s*[,·]\s*/).filter(Boolean);
+    tracks.push({
+      title,
+      artist: artists.join(", ") || rawArtist,
+      mainArtist: artists[0] || rawArtist // Cifra Club usa só o artista principal na URL
+    });
   }
   return tracks;
 }
 
 // Extrai o ID de uma URL de playlist do Spotify (open.spotify.com/playlist/<id>)
+// Aceita também intl-pt-BR/ e URIs spotify:playlist:<id>
 export function extractSpotifyPlaylistId(url) {
-  const m = String(url || "").match(/open\.spotify\.com\/(?:intl-[a-z]{2}\/)?playlist\/([A-Za-z0-9]{15,})/);
+  const m = String(url || "").match(/(?:open\.spotify\.com\/(?:intl-[a-zA-Z-]+\/)?playlist\/|spotify:playlist:)([A-Za-z0-9]{15,})/);
   return m ? m[1] : null;
+}
+
+// Títulos do Spotify trazem sufixos que não existem na URL do Cifra Club
+// ("Música - Ao Vivo", "Música (feat. X)", "Música - Remastered 2011").
+// Retorna os títulos a tentar, do mais limpo ao original.
+export function spotifyTitleCandidates(title) {
+  const original = String(title || "").trim();
+  const cleaned = original
+    .replace(/\s*[\(\[][^\)\]]*[\)\]]/g, "") // (feat. X), [Ao Vivo]
+    .replace(/\s+-\s+.*$/, "")                // - Ao Vivo, - Remastered 2011
+    .trim();
+  return [...new Set([cleaned, original].filter(Boolean))];
 }
 
 // Decodifica entidades HTML comuns
