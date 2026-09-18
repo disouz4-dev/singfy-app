@@ -15,6 +15,9 @@ export class AutoRollPlayer {
     this.viewportHeight = 0;
     this.maxScroll = 0;
     this.animationFrame = null;
+
+    // Rolagem automática (desligada por padrão — rolagem manual apenas)
+    this.autoScroll = options.autoScroll === true;
     
     // Microfone
     this.audioContext = null;
@@ -52,7 +55,8 @@ export class AutoRollPlayer {
     this.maxScroll = Math.max(0, this.contentHeight - this.viewportHeight);
   }
 
-  // Inicia rolagem
+  // Inicia "reprodução" (play/pause visual/controle). A rolagem automática
+  // só acontece se autoScroll estiver ativo.
   async start() {
     if (this.isPlaying) return;
     
@@ -62,7 +66,9 @@ export class AutoRollPlayer {
     this.lastSoundTime = Date.now();
     this.silenceDetected = false;
     
-    this.animate();
+    if (this.autoScroll) {
+      this.animate();
+    }
     
     // Tenta iniciar microfone se habilitado
     if (this.micEnabled) {
@@ -237,28 +243,32 @@ export function estimateDuration(bpm, measures, beatsPerMeasure = 4) {
 }
 
 // Helper: detecta BPM aproximado por tap
+// Aceita batidas contínuas (sem limite). O BPM é recalculado a cada nova
+// batida usando a média dos intervalos das últimas 4 batidas (janela móvel).
 export class TapTempo {
   constructor() {
     this.taps = [];
-    this.maxTaps = 8;
   }
-  
+
   tap() {
     const now = Date.now();
     this.taps.push(now);
-    if (this.taps.length > this.maxTaps) this.taps.shift();
+    // Mantém apenas as últimas 64 batidas para não acumular memória,
+    // mas nunca impede de bater novamente (batida infinita).
+    if (this.taps.length > 64) this.taps.shift();
   }
-  
+
   getBPM() {
-    if (this.taps.length < 2) return null;
+    const last = this.taps.slice(-4); // janela móvel das 4 batidas mais recentes
+    if (last.length < 2) return null;
     const intervals = [];
-    for (let i = 1; i < this.taps.length; i++) {
-      intervals.push(this.taps[i] - this.taps[i-1]);
+    for (let i = 1; i < last.length; i++) {
+      intervals.push(last[i] - last[i - 1]);
     }
-    const avg = intervals.reduce((a,b) => a+b, 0) / intervals.length;
+    const avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
     return Math.round(60000 / avg);
   }
-  
+
   reset() {
     this.taps = [];
   }

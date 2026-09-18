@@ -1,5 +1,5 @@
 // sw.js — Service Worker para Singfy (PWA offline)
-const CACHE_NAME = 'singfy-v1';
+const CACHE_NAME = 'singfy-v47';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -52,20 +52,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   
-  // Static assets - cache first
+  // Static assets - network first (fresh), cache fallback (offline)
   event.respondWith(
-    caches.match(event.request)
-      .then((cached) => {
-        if (cached) return cached;
-        return fetch(event.request)
-          .then((response) => {
-            if (response.ok) {
-              const clone = response.clone();
-              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-            }
-            return response;
-          });
+    fetch(event.request)
+      .then((response) => {
+        if (response.ok && (url.pathname.startsWith('/js/') || url.pathname.startsWith('/css/'))) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        }
+        return response;
       })
+      .catch(() => caches.match(event.request))
   );
 });
 

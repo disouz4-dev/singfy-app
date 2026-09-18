@@ -4,79 +4,218 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#1a1a2e">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="apple-touch-icon" href="favicon.svg">
   <meta name="description" content="Singfy - Setlist e cifra para shows com auto-roll e transposição">
   <title>Singfy</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=20260910">
   <link rel="manifest" href="manifest.json">
+  <script async src="https://cse.google.com/cse.js?cx=b630d192f3e994907"></script>
 </head>
 <body>
+  <script>
+    // Limpa Service Worker e caches antigos (sem reload para não causar loop)
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(regs) {
+        regs.forEach(function(reg) { reg.unregister(); });
+      });
+      if (window.caches) {
+        caches.keys().then(function(keys) {
+          keys.forEach(function(key) { caches.delete(key); });
+        });
+      }
+    }
+  </script>
   <div id="app">
+    <!-- Tela de Login -->
+    <section id="screen-login" class="screen" role="main" aria-label="Login">
+      <main class="login-main">
+        <div class="login-card">
+          <div class="login-header">
+            <h1 class="logo">Singfy</h1>
+            <p class="login-subtitle">Setlist e cifra para shows</p>
+          </div>
+          
+          <div id="login-buttons">
+            <button id="btn-login-google" class="btn btn-primary btn-block btn-lg" disabled>
+              <span class="google-badge">
+                <svg class="google-icon" viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+              </span>
+              <span>Entrar com Google</span>
+            </button>
+          </div>
+
+          <div class="login-divider"><span>ou</span></div>
+
+          <div class="auth-tabs" role="tablist">
+            <button type="button" id="tab-login" class="auth-tab active" role="tab" aria-selected="true">Entrar</button>
+            <button type="button" id="tab-register" class="auth-tab" role="tab" aria-selected="false">Criar conta</button>
+          </div>
+
+          <div class="email-auth">
+            <form id="form-login" class="auth-form" novalidate>
+              <input type="email" id="auth-email" class="auth-input" placeholder="E-mail" autocomplete="email">
+              <input type="password" id="auth-password" class="auth-input" placeholder="Senha" autocomplete="current-password">
+              <button type="submit" id="btn-auth-login" class="btn btn-primary btn-block">Entrar</button>
+              <button type="button" id="btn-auth-forgot" class="btn-link">Esqueci a senha</button>
+              <button type="button" id="btn-auth-set-password" class="btn-link">Sua conta é do Google? Crie uma senha para entrar por e-mail</button>
+            </form>
+
+            <form id="form-register" class="auth-form" novalidate hidden>
+              <input type="text" id="reg-name" class="auth-input" placeholder="Seu nome" autocomplete="name">
+              <input type="email" id="reg-email" class="auth-input" placeholder="E-mail" autocomplete="email">
+              <input type="password" id="reg-password" class="auth-input" placeholder="Senha (mín. 6)" autocomplete="new-password">
+              <input type="password" id="reg-password2" class="auth-input" placeholder="Confirmar senha" autocomplete="new-password">
+              <button type="submit" id="btn-auth-register" class="btn btn-primary btn-block">Criar conta</button>
+            </form>
+          </div>
+        </div>
+      </main>
+      <footer class="bottombar">
+        <span class="app-version" id="app-version-login"></span>
+      </footer>
+    </section>
+
     <!-- Tela de Busca / Home -->
-    <section id="screen-search" class="screen active" role="main">
+    <section id="screen-search" class="screen" role="main">
       <header class="topbar">
         <h1 class="logo">Singfy</h1>
-        <button id="btn-setlist" class="icon-btn" aria-label="Ver setlist" title="Setlist (S)">
+        <div class="topbar-actions" id="search-topbar-actions">
+          <button id="btn-setlist" class="icon-btn" aria-label="Ver setlist" title="Setlist (S)">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 3h18v18H3z"/>
+              <path d="M7 7h10"/>
+              <path d="M7 12h10"/>
+              <path d="M7 17h7"/>
+            </svg>
+            <span class="badge" id="setlist-badge" hidden>0</span>
+          </button>
+          <button id="btn-share-home" class="btn btn-ghost hidden" aria-label="Compartilhar sessão" title="Compartilhar setlist">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="18" cy="5" r="3"/>
+              <circle cx="6" cy="12" r="3"/>
+              <circle cx="18" cy="19" r="3"/>
+              <path d="M8.59 13.51l1.06 1.06M15.49 13.51l-1.06 1.06M12 8.59l1.06 1.06M12 15.49l-1.06 1.06"/>
+            </svg>
+            <span>Compartilhar</span>
+          </button>
+        </div>
+      </header>
+      
+      <main class="search-main">
+        <div id="gcse-search-box" class="gcse-search" data-async="true"></div>
+
+        <div class="login-divider"><span>ou importe por link</span></div>
+
+        <form id="url-import" class="url-import" autocomplete="off">
+          <label for="input-cifra-url" class="visually-hidden">Link da cifra</label>
+          <input type="url" id="input-cifra-url" class="auth-input" placeholder="Cole o link da cifra (URL)" autocomplete="off">
+          <button type="button" id="btn-fetch-url" class="btn btn-primary btn-block">Importar por link</button>
+        </form>
+
+        <div class="login-divider"><span>ou monte a setlist via Spotify</span></div>
+
+        <form id="spotify-import" class="url-import" autocomplete="off">
+          <label for="input-spotify-url" class="visually-hidden">Link da playlist do Spotify</label>
+          <input type="url" id="input-spotify-url" class="auth-input" placeholder="Cole o link da playlist do Spotify" autocomplete="off">
+          <button type="button" id="btn-fetch-spotify" class="btn btn-primary btn-block">
+            <span class="btn-text">Importar playlist do Spotify</span>
+            <span class="spinner hidden" aria-hidden="true"></span>
+          </button>
+        </form>
+        <div id="spotify-progress" class="spotify-progress hidden" aria-live="polite"></div>
+      </main>
+      
+      <footer class="bottombar">
+        <kbd>Enter</kbd> busca &nbsp;·&nbsp; <kbd>S</kbd> abre setlist
+        <span class="app-version" id="app-version"></span>
+      </footer>
+    </section>
+    
+    <!-- Tela Minhas Setlists -->
+    <section id="screen-my-setlists" class="screen" role="main" aria-label="Minhas Setlists">
+      <header class="topbar">
+        <button id="btn-back-search-ml" class="icon-btn" aria-label="Voltar à busca">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+        </button>
+        <h1 class="logo">Minhas Setlists</h1>
+        <div class="topbar-actions">
+          <button id="btn-new-setlist-ml" class="btn btn-ghost" aria-label="Nova setlist" title="Nova setlist">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            <span>Nova</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="setlists-main">
+        <div id="my-setlists-list" class="setlists-list" role="list" aria-label="Minhas setlists">
+          <!-- Cards inseridos via JS -->
+        </div>
+
+        <div id="my-setlists-empty" class="empty-state">
+          <svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3">
             <path d="M3 3h18v18H3z"/>
             <path d="M7 7h10"/>
             <path d="M7 12h10"/>
             <path d="M7 17h7"/>
           </svg>
-          <span class="badge" id="setlist-badge" hidden>0</span>
-        </button>
-      </header>
-      
-      <main class="search-main">
-        <form id="search-form" class="search-form" autocomplete="off">
-          <div class="input-group">
-            <label for="input-artist" class="visually-hidden">Artista</label>
-            <input type="text" id="input-artist" name="artist" placeholder="Artista" required autocomplete="off">
-          </div>
-          <div class="input-group">
-            <label for="input-song" class="visually-hidden">Música</label>
-            <input type="text" id="input-song" name="song" placeholder="Música" required autocomplete="off">
-          </div>
-          <button type="submit" class="btn btn-primary btn-block" id="btn-search">
-            <svg class="spinner" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" hidden>
-              <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
-              <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round">
-                <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
-              </path>
+          <p>Nenhuma setlist ainda</p>
+          <span>Monte suas setlists para os shows</span>
+          <button id="btn-empty-new-setlist-ml" class="btn btn-primary" style="margin-top: var(--space-3);">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 5v14M5 12h14"/>
             </svg>
-            <span class="btn-text">Buscar cifra</span>
+            Criar setlist
           </button>
-        </form>
-        
-        <div id="search-result" class="search-result hidden" aria-live="polite">
-          <!-- Preenchido via JS -->
         </div>
-        
-        <div id="search-error" class="error-message hidden" role="alert"></div>
       </main>
-      
       <footer class="bottombar">
-        <kbd>Enter</kbd> busca &nbsp;·&nbsp; <kbd>S</kbd> abre setlist
+        <span class="app-version" id="app-version-setlists"></span>
       </footer>
     </section>
-    
-    <!-- Tela de Setlist -->
+
+    <!-- Tela de Setlist (detalhe de uma setlist) -->
     <section id="screen-setlist" class="screen" role="main" aria-label="Setlist">
       <header class="topbar">
-        <button id="btn-back-search" class="icon-btn" aria-label="Voltar à busca">
+        <button id="btn-back-setlist" class="icon-btn" aria-label="Voltar às minhas setlists">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M19 12H5M12 19l-7-7 7-7"/>
           </svg>
         </button>
         <h1 class="logo">Setlist</h1>
         <div class="topbar-actions">
+          <button id="btn-new-setlist" class="btn btn-ghost" aria-label="Nova setlist" title="Nova setlist (N)">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            <span>Nova</span>
+          </button>
           <button id="btn-clear-setlist" class="icon-btn danger" aria-label="Limpar setlist" title="Limpar tudo">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"/>
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
             </svg>
+          </button>
+          <button id="btn-share-session" class="btn btn-ghost" aria-label="Compartilhar sessão" title="Compartilhar setlist">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="18" cy="5" r="3"/>
+              <circle cx="6" cy="12" r="3"/>
+              <circle cx="18" cy="19" r="3"/>
+              <path d="M8.59 13.51l1.06 1.06M15.49 13.51l-1.06 1.06M12 8.59l1.06 1.06M12 15.49l-1.06 1.06"/>
+            </svg>
+            <span>Compartilhar</span>
           </button>
           <button id="btn-start-show" class="btn btn-primary" aria-label="Iniciar show">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>
@@ -86,9 +225,28 @@
       </header>
       
       <main class="setlist-main">
+        <div id="setlist-meta" class="setlist-meta hidden">
+          <button id="btn-edit-setlist" class="setlist-meta-edit" aria-label="Editar setlist" title="Editar nome, data e casa">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
+            </svg>
+          </button>
+          <div class="setlist-meta-info">
+            <h2 id="setlist-meta-name" class="setlist-meta-name">—</h2>
+            <div class="setlist-meta-line">
+              <span id="setlist-meta-venue" class="setlist-meta-venue"></span>
+              <span id="setlist-meta-date" class="setlist-meta-date"></span>
+            </div>
+          </div>
+        </div>
         <ul id="setlist-list" class="setlist-list" role="list" aria-label="Músicas do show">
           <!-- Itens inseridos via JS -->
         </ul>
+
+        <button id="btn-add-music" class="btn btn-add-music" type="button">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+          <span>Adicionar música</span>
+        </button>
         
         <div id="setlist-empty" class="empty-state hidden">
           <svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3">
@@ -97,10 +255,19 @@
             <path d="M7 12h10"/>
             <path d="M7 17h7"/>
           </svg>
-          <p>Nenhuma música no setlist</p>
+          <p>Nenhuma música nesta setlist</p>
           <span>Busque uma cifra e adicione</span>
+          <button id="btn-add-music-empty" class="btn btn-primary" style="margin-top: var(--space-3);">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 3h18v18H3z"/><path d="M7 7h10"/><path d="M7 12h10"/><path d="M7 17h7"/>
+            </svg>
+            Adicionar música
+          </button>
         </div>
       </main>
+      <footer class="bottombar">
+        <span class="app-version" id="app-version-setlist"></span>
+      </footer>
     </section>
     
     <!-- Tela de Show (Modo Apresentação) -->
@@ -150,6 +317,15 @@
             <button id="speed-down" class="icon-btn" aria-label="Diminuir velocidade">−</button>
             <span id="speed-value" class="speed-value">1.0x</span>
             <button id="speed-up" class="icon-btn" aria-label="Aumentar velocidade">+</button>
+            <button id="btn-tap-tempo" class="btn btn-ghost tap-tempo-btn" aria-label="Marcar andamento (tap tempo)" title="Toque no andamento para ajustar a rolagem">Tap</button>
+          </div>
+        </div>
+        <div class="control-group">
+          <label class="control-label">Fonte</label>
+          <div class="speed-control font-control">
+            <button id="font-down" class="icon-btn" aria-label="Diminuir fonte">−</button>
+            <span id="font-value" class="speed-value">18</span>
+            <button id="font-up" class="icon-btn" aria-label="Aumentar fonte">+</button>
           </div>
         </div>
         <div class="control-group">
@@ -172,15 +348,57 @@
           </button>
         </div>
         <div class="control-group">
+          <label class="control-label">MIDI</label>
+          <button id="btn-midi" class="btn btn-ghost mic-btn" aria-label="Conectar controlador MIDI" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="3"/>
+              <circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"/>
+              <circle cx="7.5" cy="12" r="1.4" fill="currentColor" stroke="none"/>
+              <circle cx="16.5" cy="12" r="1.4" fill="currentColor" stroke="none"/>
+            </svg>
+            <span class="mic-label">MIDI</span>
+          </button>
+        </div>
+        <div class="control-group">
           <label class="control-label">Tom</label>
-          <div id="transpose-buttons" class="transpose-buttons" role="group" aria-label="Transposição"></div>
+          <div id="tom-control" class="tom-control" role="group" aria-label="Tom da música">
+            <button id="tom-dec" class="icon-btn" aria-label="Diminuir tom">−</button>
+            <button id="tom-note" class="tom-note-btn" aria-label="Mudar tom" title="Toque para mudar o tom">C</button>
+            <button id="tom-inc" class="icon-btn" aria-label="Aumentar tom">+</button>
+          </div>
+        </div>
+        <div class="tabs-cifra-actions">
+          <button id="show-toggle-lettra" class="btn btn-ghost" aria-label="Ocultar a cifra" aria-pressed="false">Ocultar cifra</button>
+          <button id="show-hide-tabs" class="btn btn-ghost" aria-label="Ocultar tablaturas" aria-pressed="false">Ocultar tab</button>
         </div>
         <button id="show-exit" class="btn btn-ghost" aria-label="Sair do modo show">Sair</button>
       </footer>
     </section>
     
+    <!-- Modal Nova/Editar Setlist -->
+    <div id="setlist-modal" class="modal-overlay" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="setlist-modal-title">
+        <h3 id="setlist-modal-title">Nova Setlist</h3>
+        <form id="setlist-modal-form" novalidate>
+          <label class="modal-label" for="setlist-name">Nome da setlist</label>
+          <input type="text" id="setlist-name" class="auth-input" placeholder="Ex.: Show de sábado" autocomplete="off">
+          <label class="modal-label" for="setlist-date">Data do evento</label>
+          <input type="date" id="setlist-date" class="auth-input">
+          <label class="modal-label" for="setlist-venue">Casa / local</label>
+          <input type="text" id="setlist-venue" class="auth-input" placeholder="Ex.: Rock Bar" autocomplete="off">
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" id="setlist-modal-cancel">Cancelar</button>
+            <button type="submit" class="btn btn-primary" id="setlist-modal-save">Criar setlist</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <!-- Toast notifications -->
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+    <!-- Diagnóstico MIDI via Bluetooth (último pacote recebido) -->
+    <div id="midi-debug" class="midi-debug" hidden></div>
   </div>
   
   <!-- Firebase Config (fornecido pelo usuário) -->
@@ -198,11 +416,14 @@
   </script>
   
   <!-- Módulos da aplicação -->
-  <script type="module" src="js/parser.js"></script>
-  <script type="module" src="js/transpose.js"></script>
-  <script type="module" src="js/setlist.js"></script>
-  <script type="module" src="js/player.js"></script>
-  <script type="module" src="js/api.js"></script>
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/auth.js?v=20260905"></script>
+  <script type="module" src="js/session.js"></script>
+    <script type="module" src="js/parser.js?v=20260904"></script>
+    <script type="module" src="js/transpose.js?v=20260227"></script>
+    <script type="module" src="js/setlist.js?v=20260905"></script>
+    <script type="module" src="js/player.js?v=20260227"></script>
+    <script type="module" src="js/api.js?v=20260227"></script>
+    <script type="module" src="js/voicesync.js?v=20260227"></script>
+    <script type="module" src="js/app.js?v=20260912"></script>
 </body>
 </html>

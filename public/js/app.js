@@ -1,11 +1,18 @@
 // app.js — Aplicação principal Singfy
 // Inicialização, roteamento, estado global, integração dos módulos
 
-import { parseSongResponse, linesToHtml, linesToClassic, extractUniqueChords } from './parser.js';
+import { parseSongResponse, linesToHtml, linesToClassic, extractUniqueChords, normalizeLines, isSectionLike } from './parser.js?v=20260904';
 import { transposeChord, transposeSong, getHarmonicField, detectKey, formatChord, generateTransposeButtons } from './transpose.js';
 import { setlist, SetlistManager } from './setlist.js';
-import { AutoRollPlayer, estimateDuration, TapTempo } from './player.js';
-import { fetchSong, toSlug, isValidSlug } from './api.js';
+import { AutoRollPlayer, estimateDuration, TapTempo } from './player.js?v=20250925';
+import { fetchSong, toSlug, isValidSlug, isCifraLink, fetchSpotifyPlaylistTracks, extractSpotifyPlaylistId } from './api.js?v=20250929';
+import { initAuth, signInWithGoogle, signOutUser, onAuthChange, getCurrentUser, isAuthenticated, setPostLoginHandler, onSetlistReady, registerWithEmail, loginWithEmail, resetPassword, setDisplayName, createPasswordForAccount } from './auth.js?v=20260905';
+import { createSession, getInviteLink, checkUrlForSession, onSessionChange } from './session.js';
+import { VoiceSync } from './voicesync.js?v=20260224';
+import { MidiController } from './midi.js?v=20260913';
+
+// ===== Versão do App =====
+const APP_VERSION = 'v1.5.1';
 
 // ===== Estado Global =====
 const state = {
@@ -16,8 +23,28 @@ const state = {
   player: null,
   tapTempo: new TapTempo(),
   wakeLock: null,
-  isFullscreen: false
+  isFullscreen: false,
+  cifraSize: loadPref('cifraSize', 18),   // tamanho da fonte da cifra (px)
+  hideTabs: loadPref('hideTabs', true),    // tab ocultada por padrão
+  lyricsOnly: false,                       // mostrar apenas a letra (sem acordes)
+  savedSpeed: 1.0,                         // cache do último tempo (speed) da música atual
+  voiceSync: null,                          // sincronização por voz (Web Speech API)
+  midi: new MidiController(),               // controlador MIDI "chocolate"
+  midiConnected: false
 };
+
+function loadPref(key, fallback) {
+  try {
+    const v = localStorage.getItem('singfy_' + key);
+    return v === null ? fallback : JSON.parse(v);
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function savePref(key, value) {
+  try { localStorage.setItem('singfy_' + key, JSON.stringify(value)); } catch (e) {}
+}
 
 // ===== Elementos DOM (cache) =====
 const els = {};
@@ -28,13 +55,57 @@ document.addEventListener('DOMContentLoaded', init);
 async function init() {
   cacheElements();
   bindEvents();
+  setupCifraLinkInterceptor();
+  
+  // Mostra versão no rodapé em todas as telas
+  document.querySelectorAll('.app-version').forEach(el => {
+    el.textContent = `Singfy ${APP_VERSION}`;
+  });
+  
+  // Mostra tela IMEDIATAMENTE (fallback visual)
   restoreScreen();
   updateSetlistBadge();
   
-  // Service Worker para PWA
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  // Habilita botão de login após cache
+  if (els.btnLoginGoogle) {
+    els.btnLoginGoogle.disabled = false;
   }
+  
+  try {
+    // Navega para a home do usuário (setlist pessoal) assim que o login for
+    // confirmado — direto após redirect, sem depender só do listener de estado
+    setPostLoginHandler(() => {
+      console.log('[singfy] postLoginHandler: usuário presente, navegando p/ setlist');
+      if (state.currentScreen === 'login') showMySetlists();
+    });
+    
+    // Inicializa autenticação (não bloqueia UI)
+    await initAuth();
+    
+    // Verifica se há sessão na URL (convite)
+    const sessionId = checkUrlForSession();
+    if (sessionId) {
+      await joinSessionFromUrl(sessionId);
+    }
+    
+    // Listener de auth
+    onAuthChange(handleAuthChange);
+
+    // Quando o setlist termina de carregar/sincronizar da nuvem, re-renderiza
+    // a lista de setlists (importante para dispositivos com nuvem populada).
+    onSetlistReady(() => {
+      updateSetlistBadge();
+      if (state.currentScreen === 'my-setlists') renderMySetlists();
+    });
+  } catch (err) {
+    console.error('Erro na autenticação (modo offline):', err);
+    // Continua em modo convidado
+  }
+  
+  // Service Worker desativado temporariamente p/ evitar cache quebrando módulos
+  // if ('serviceWorker' in navigator) {
+  //   navigator.serviceWorker.register('/sw.js').catch(() => {});
+  // }
   
   // Previne zoom em inputs no iOS
   document.addEventListener('touchstart', () => {}, { passive: true });
@@ -42,32 +113,76 @@ async function init() {
 
 function cacheElements() {
   // Telas
+  els.screenLogin = document.getElementById('screen-login');
   els.screenSearch = document.getElementById('screen-search');
+  els.screenMySetlists = document.getElementById('screen-my-setlists');
   els.screenSetlist = document.getElementById('screen-setlist');
   els.screenShow = document.getElementById('screen-show');
   
+  // Login
+  els.btnLoginGoogle = document.getElementById('btn-login-google');
+  els.loginButtons = document.getElementById('login-buttons');
+  els.tabLogin = document.getElementById('tab-login');
+  els.tabRegister = document.getElementById('tab-register');
+  els.formLogin = document.getElementById('form-login');
+  els.formRegister = document.getElementById('form-register');
+  els.authEmail = document.getElementById('auth-email');
+  els.authPassword = document.getElementById('auth-password');
+  els.btnAuthLogin = document.getElementById('btn-auth-login');
+  els.btnAuthRegister = document.getElementById('btn-auth-register');
+  els.btnAuthForgot = document.getElementById('btn-auth-forgot');
+  els.btnAuthSetPassword = document.getElementById('btn-auth-set-password');
+  els.regName = document.getElementById('reg-name');
+  els.regEmail = document.getElementById('reg-email');
+  els.regPassword = document.getElementById('reg-password');
+  els.regPassword2 = document.getElementById('reg-password2');
+  
   // Search
-  els.searchForm = document.getElementById('search-form');
-  els.inputArtist = document.getElementById('input-artist');
-  els.inputSong = document.getElementById('input-song');
-  els.btnSearch = document.getElementById('btn-search');
-  els.searchResult = document.getElementById('search-result');
-  els.searchError = document.getElementById('search-error');
+  els.gcseBox = document.getElementById('gcse-search-box');
   els.btnSetlist = document.getElementById('btn-setlist');
   els.setlistBadge = document.getElementById('setlist-badge');
+  els.btnShareHome = document.getElementById('btn-share-home');
   
-  // Setlist
-  els.btnBackSearch = document.getElementById('btn-back-search');
+  // Minhas Setlists
+  els.btnBackSearchML = document.getElementById('btn-back-search-ml');
+  els.mySetlistsList = document.getElementById('my-setlists-list');
+  els.mySetlistsEmpty = document.getElementById('my-setlists-empty');
+  els.btnNewSetlistML = document.getElementById('btn-new-setlist-ml');
+  els.btnEmptyNewSetlistML = document.getElementById('btn-empty-new-setlist-ml');
+
+  // Setlist (detalhe)
+  els.btnBackSetlist = document.getElementById('btn-back-setlist');
+  els.setlistMeta = document.getElementById('setlist-meta');
+  els.setlistMetaName = document.getElementById('setlist-meta-name');
+  els.setlistMetaVenue = document.getElementById('setlist-meta-venue');
+  els.setlistMetaDate = document.getElementById('setlist-meta-date');
+  els.btnEditSetlist = document.getElementById('btn-edit-setlist');
   els.setlistList = document.getElementById('setlist-list');
+  els.setlistMain = document.querySelector('#screen-setlist .setlist-main');
   els.setlistEmpty = document.getElementById('setlist-empty');
   els.btnClearSetlist = document.getElementById('btn-clear-setlist');
+  els.btnNewSetlist = document.getElementById('btn-new-setlist');
+  els.btnShareSession = document.getElementById('btn-share-session');
   els.btnStartShow = document.getElementById('btn-start-show');
+  els.btnAddMusicEmpty = document.getElementById('btn-add-music-empty');
+  els.btnAddMusic = document.getElementById('btn-add-music');
+
+  // Modal de Setlist
+  els.setlistModal = document.getElementById('setlist-modal');
+  els.setlistModalTitle = document.getElementById('setlist-modal-title');
+  els.setlistModalForm = document.getElementById('setlist-modal-form');
+  els.setlistModalName = document.getElementById('setlist-name');
+  els.setlistModalDate = document.getElementById('setlist-date');
+  els.setlistModalVenue = document.getElementById('setlist-venue');
+  els.setlistModalCancel = document.getElementById('setlist-modal-cancel');
+  els.setlistModalSave = document.getElementById('setlist-modal-save');
   
   // Show
   els.showTopbar = document.getElementById('show-topbar');
   els.showBottombar = document.getElementById('show-bottombar');
   els.showScrollContainer = document.getElementById('show-scroll-container');
   els.showCifraContent = document.getElementById('show-cifra-content');
+  els.showToggleLetra = document.getElementById('show-toggle-lettra');
   els.showProgressFill = document.getElementById('show-progress-fill');
   els.showCurrentPosition = document.getElementById('show-current-position');
   els.showSongTitle = document.getElementById('show-song-title');
@@ -81,36 +196,97 @@ function cacheElements() {
   els.speedDown = document.getElementById('speed-down');
   els.speedUp = document.getElementById('speed-up');
   els.speedValue = document.getElementById('speed-value');
+  els.btnTapTempo = document.getElementById('btn-tap-tempo');
+  els.btnMidi = document.getElementById('btn-midi');
+  els.fontDown = document.getElementById('font-down');
+  els.fontUp = document.getElementById('font-up');
+  els.fontValue = document.getElementById('font-value');
+  els.showHideTabs = document.getElementById('show-hide-tabs');
   els.micToggle = document.getElementById('mic-toggle');
-  els.transposeButtons = document.getElementById('transpose-buttons');
+  els.tomDec = document.getElementById('tom-dec');
+  els.tomNote = document.getElementById('tom-note');
+  els.tomInc = document.getElementById('tom-inc');
   
+  els.inputCifraUrl = document.getElementById('input-cifra-url');
+  els.btnFetchUrl = document.getElementById('btn-fetch-url');
+  els.formUrlImport = document.getElementById('url-import');
+
+  els.inputSpotifyUrl = document.getElementById('input-spotify-url');
+  els.btnFetchSpotify = document.getElementById('btn-fetch-spotify');
+  els.spotifyProgress = document.getElementById('spotify-progress');
+  els.formSpotifyImport = document.getElementById('spotify-import');
+
   // Toast
   els.toastContainer = document.getElementById('toast-container');
 }
 
 function bindEvents() {
-  // Search
-  els.searchForm.addEventListener('submit', handleSearch);
-  els.btnSetlist.addEventListener('click', () => showScreen('setlist'));
+  // Login
+  if (els.btnLoginGoogle) els.btnLoginGoogle.addEventListener('click', handleLoginGoogle);
+  if (els.tabLogin) els.tabLogin.addEventListener('click', () => setAuthMode('login'));
+  if (els.tabRegister) els.tabRegister.addEventListener('click', () => setAuthMode('register'));
+  if (els.formLogin) els.formLogin.addEventListener('submit', (e) => { e.preventDefault(); handleEmailLogin(); });
+  if (els.formRegister) els.formRegister.addEventListener('submit', (e) => { e.preventDefault(); handleEmailRegister(); });
+  if (els.btnAuthForgot) els.btnAuthForgot.addEventListener('click', handleForgotPassword);
+  if (els.btnAuthSetPassword) els.btnAuthSetPassword.addEventListener('click', handleSetPassword);
   
-  // Setlist
-  els.btnBackSearch.addEventListener('click', () => showScreen('search'));
-  els.btnClearSetlist.addEventListener('click', handleClearSetlist);
-  els.btnStartShow.addEventListener('click', handleStartShow);
-  els.setlistList.addEventListener('click', handleSetlistClick);
+  // URL fetch
+  if (els.btnFetchUrl) els.btnFetchUrl.addEventListener('click', handleFetchFromUrl);
+  if (els.formUrlImport) els.formUrlImport.addEventListener('submit', (e) => { e.preventDefault(); handleFetchFromUrl(); });
+
+  // Spotify playlist
+  if (els.btnFetchSpotify) els.btnFetchSpotify.addEventListener('click', handleSpotifyImport);
+  if (els.formSpotifyImport) els.formSpotifyImport.addEventListener('submit', (e) => { e.preventDefault(); handleSpotifyImport(); });
+  
+  // Search
+  if (els.btnSetlist) els.btnSetlist.addEventListener('click', () => showMySetlists());
+  if (els.btnShareHome) els.btnShareHome.addEventListener('click', handleShareSession);
+
+  // Minhas Setlists
+  if (els.btnBackSearchML) els.btnBackSearchML.addEventListener('click', () => showScreen('search'));
+  if (els.btnNewSetlistML) els.btnNewSetlistML.addEventListener('click', () => openSetlistModal());
+  if (els.btnEmptyNewSetlistML) els.btnEmptyNewSetlistML.addEventListener('click', () => openSetlistModal());
+  if (els.mySetlistsList) els.mySetlistsList.addEventListener('click', handleMySetlistsClick);
+
+  // Setlist (detalhe)
+  if (els.btnBackSetlist) els.btnBackSetlist.addEventListener('click', () => showMySetlists());
+  if (els.btnClearSetlist) els.btnClearSetlist.addEventListener('click', handleClearSetlist);
+  if (els.btnNewSetlist) els.btnNewSetlist.addEventListener('click', () => openSetlistModal());
+  if (els.btnEditSetlist) els.btnEditSetlist.addEventListener('click', () => openSetlistModal(setlist.getActive()));
+  if (els.btnShareSession) els.btnShareSession.addEventListener('click', handleShareSession);
+  if (els.btnStartShow) els.btnStartShow.addEventListener('click', handleStartShow);
+  if (els.btnAddMusicEmpty) els.btnAddMusicEmpty.addEventListener('click', () => { showGcseSearch(); showScreen('search'); });
+  if (els.btnAddMusic) els.btnAddMusic.addEventListener('click', () => { showGcseSearch(); showScreen('search'); });
+  if (els.setlistList) els.setlistList.addEventListener('click', handleSetlistClick);
+
+  // Modal Nova/Editar Setlist
+  if (els.setlistModalForm) els.setlistModalForm.addEventListener('submit', handleSetlistModalSubmit);
+  if (els.setlistModalCancel) els.setlistModalCancel.addEventListener('click', closeSetlistModal);
+  if (els.setlistModal) els.setlistModal.addEventListener('click', (e) => {
+    if (e.target === els.setlistModal) closeSetlistModal();
+  });
   
   // Drag & Drop setlist
   setupDragAndDrop();
   
   // Show
-  els.showPlayPause.addEventListener('click', togglePlayPause);
-  els.showPrev.addEventListener('click', handlePrevSong);
-  els.showNext.addEventListener('click', handleNextSong);
-  els.showExit.addEventListener('click', () => showScreen('setlist'));
-  els.speedDown.addEventListener('click', () => adjustSpeed(-0.1));
-  els.speedUp.addEventListener('click', () => adjustSpeed(0.1));
-  els.micToggle.addEventListener('click', toggleMic);
-  els.showScrollContainer.addEventListener('scroll', handleScroll);
+  if (els.showPlayPause) els.showPlayPause.addEventListener('click', togglePlayPause);
+  if (els.showPrev) els.showPrev.addEventListener('click', handlePrevSong);
+  if (els.showNext) els.showNext.addEventListener('click', handleNextSong);
+  if (els.showExit) els.showExit.addEventListener('click', () => showScreen('setlist'));
+  if (els.speedDown) els.speedDown.addEventListener('click', () => adjustSpeed(-0.1));
+  if (els.speedUp) els.speedUp.addEventListener('click', () => adjustSpeed(0.1));
+  if (els.btnTapTempo) els.btnTapTempo.addEventListener('click', handleTapTempo);
+  if (els.btnMidi) els.btnMidi.addEventListener('click', handleMidiToggle);
+  if (els.fontDown) els.fontDown.addEventListener('click', () => adjustFontSize(-1));
+  if (els.fontUp) els.fontUp.addEventListener('click', () => adjustFontSize(1));
+  if (els.showHideTabs) els.showHideTabs.addEventListener('click', toggleHideTabs);
+  if (els.showToggleLetra) els.showToggleLetra.addEventListener('click', toggleLyricsOnly);
+  if (els.tomDec) els.tomDec.addEventListener('click', () => applyTranspose(state.currentTransposeSemitones - 1));
+  if (els.tomInc) els.tomInc.addEventListener('click', () => applyTranspose(state.currentTransposeSemitones + 1));
+  if (els.tomNote) els.tomNote.addEventListener('click', cycleTom);
+  if (els.micToggle) els.micToggle.addEventListener('click', toggleMic);
+  if (els.showScrollContainer) els.showScrollContainer.addEventListener('scroll', handleScroll);
   
   // Teclado
   document.addEventListener('keydown', handleKeydown);
@@ -122,18 +298,24 @@ function bindEvents() {
   document.addEventListener('visibilitychange', handleVisibilityChange);
   
   // Wake lock
-  els.showScrollContainer.addEventListener('click', requestWakeLock);
+  if (els.showScrollContainer) els.showScrollContainer.addEventListener('click', requestWakeLock);
 }
 
 // ===== Navegação de Telas =====
 function showScreen(screenName) {
-  const screens = ['search', 'setlist', 'show'];
+  const screens = ['login', 'search', 'my-setlists', 'setlist', 'show'];
   screens.forEach(s => {
     const el = document.getElementById(`screen-${s}`);
     if (el) el.classList.toggle('active', s === screenName);
   });
   
   state.currentScreen = screenName;
+
+  // Fecha teclado/foco ao trocar de tela (no celular um input da busca ainda
+  // focado deixa a tela nova "travada" — o teclado cobre a página).
+  if (document.activeElement && typeof document.activeElement.blur === 'function') {
+    document.activeElement.blur();
+  }
   
   if (screenName === 'show') {
     document.body.classList.add('show-mode');
@@ -144,44 +326,238 @@ function showScreen(screenName) {
   }
   
   // Scroll para topo nas telas de lista
-  if (screenName === 'search' || screenName === 'setlist') {
+  if (screenName === 'search' || screenName === 'setlist' || screenName === 'login') {
     window.scrollTo(0, 0);
+  }
+  // Reexibe o buscador do Google ao voltar para a busca
+  if (screenName === 'search') {
+    showGcseSearch();
   }
 }
 
 function restoreScreen() {
-  // Sempre inicia na busca
-  showScreen('search');
+  // Inicia na tela de login
+  showScreen('login');
 }
 
-// ===== Busca de Cifra =====
-async function handleSearch(e) {
-  e.preventDefault();
-  
-  const artist = els.inputArtist.value.trim();
-  const song = els.inputSong.value.trim();
-  
-  if (!artist || !song) {
-    showToast('Preencha artista e música', 'error');
+// ===== Handlers de Autenticação =====
+
+async function handleLoginGoogle() {
+  try {
+    els.btnLoginGoogle.disabled = true;
+    els.btnLoginGoogle.querySelector('span').textContent = 'Entrando...';
+    const user = await signInWithGoogle();
+    if (user) {
+      // Popup retorna o usuário direto — navega imediatamente
+      showMySetlists();
+    }
+  } catch (err) {
+    console.error('Erro no login:', err);
+    showToast('Erro ao entrar com Google', 'error');
+  } finally {
+    els.btnLoginGoogle.disabled = false;
+    els.btnLoginGoogle.querySelector('span').textContent = 'Entrar com Google';
+  }
+}
+
+function setAuthMode(mode) {
+  const isLogin = mode === 'login';
+  if (els.tabLogin) els.tabLogin.classList.toggle('active', isLogin);
+  if (els.tabRegister) els.tabRegister.classList.toggle('active', !isLogin);
+  if (els.tabLogin) els.tabLogin.setAttribute('aria-selected', String(isLogin));
+  if (els.tabRegister) els.tabRegister.setAttribute('aria-selected', String(!isLogin));
+  if (els.formLogin) els.formLogin.hidden = !isLogin;
+  if (els.formRegister) els.formRegister.hidden = isLogin;
+}
+
+async function handleEmailLogin() {
+  const email = els.authEmail ? els.authEmail.value.trim() : '';
+  const password = els.authPassword ? els.authPassword.value : '';
+  if (!email || !password) {
+    showToast('Preencha e-mail e senha', 'warning');
     return;
   }
+  try {
+    setEmailLoading(true);
+    await loginWithEmail(email, password);
+    showToast('Bem-vindo de volta!', 'success');
+    // Navegação direta (fallback), além do onAuthStateChanged
+    showMySetlists();
+  } catch (err) {
+    showToast(friendlyAuthError(err), 'error');
+  } finally {
+    setEmailLoading(false);
+  }
+}
+
+async function handleEmailRegister() {
+  const name = els.regName ? els.regName.value.trim() : '';
+  const email = els.regEmail ? els.regEmail.value.trim() : '';
+  const password = els.regPassword ? els.regPassword.value : '';
+  const password2 = els.regPassword2 ? els.regPassword2.value : '';
+  if (!name || !email || !password || !password2) {
+    showToast('Preencha todos os campos', 'warning');
+    return;
+  }
+  if (password.length < 6) {
+    showToast('A senha deve ter pelo menos 6 caracteres', 'warning');
+    return;
+  }
+  if (password !== password2) {
+    showToast('As senhas não conferem', 'warning');
+    return;
+  }
+  try {
+    setEmailLoading(true);
+    await registerWithEmail(email, password);
+    if (name) await setDisplayName(name);
+    showToast('Conta criada! Bem-vindo(a) ao Singfy', 'success');
+    // Navegação direta (fallback), além do onAuthStateChanged
+    showMySetlists();
+  } catch (err) {
+    if (err?.code === 'auth/email-already-in-use') {
+      showToast('Este e-mail já tem uma conta. Faça login.', 'warning');
+    } else {
+      showToast(friendlyAuthError(err), 'error');
+    }
+  } finally {
+    setEmailLoading(false);
+  }
+}
+
+async function handleForgotPassword() {
+  const email = els.authEmail ? els.authEmail.value.trim() : '';
+  if (!email) {
+    showToast('Digite seu e-mail acima', 'warning');
+    return;
+  }
+  try {
+    await resetPassword(email);
+    showToast('E-mail de recuperação enviado!', 'success');
+  } catch (err) {
+    showToast(friendlyAuthError(err), 'error');
+  }
+}
+
+// Cria uma senha para a conta do e-mail informado, sem precisar digitar senha
+// sempre que entrar. Usado quando a conta existe só pelo Google: loga no
+// Google UMA vez para provar que é você e vincula a senha digitada.
+async function handleSetPassword() {
+  const email = els.authEmail ? els.authEmail.value.trim() : '';
+  const password = els.authPassword ? els.authPassword.value : '';
+  if (!email || !password) {
+    showToast('Digite seu e-mail e a senha que você quer usar', 'warning');
+    return;
+  }
+  if (password.length < 6) {
+    showToast('A senha deve ter pelo menos 6 caracteres', 'warning');
+    return;
+  }
+  try {
+    setEmailLoading(true);
+    // Se já existe senha, o login direto funciona — nada a fazer.
+    try {
+      await loginWithEmail(email, password);
+      showToast('Já era possível entrar com e-mail. Bem-vindo!', 'success');
+      showMySetlists();
+      return;
+    } catch (e) {
+      if (e?.code === 'auth/network-request-failed') throw e;
+    }
+
+    // Ainda não logado com Google nesta sessão: conecta uma vez para provar
+    // que o e-mail é seu, e confere se é a MESMA conta.
+    if (!getCurrentUser()) {
+      const user = await signInWithGoogle();
+      if (!user) return;
+      if (String(user.email || '').toLowerCase() !== String(email).toLowerCase()) {
+        showToast('Entre com a conta Google do mesmo e-mail digitado', 'error');
+        return;
+      }
+    }
+
+    await createPasswordForAccount(email, password);
+    showToast('Senha criada! Agora é só entrar com e-mail e senha.', 'success');
+    showMySetlists();
+  } catch (err) {
+    console.error('Erro ao criar senha:', err);
+    if (err?.code === 'auth/email-already-in-use' || err?.code === 'auth/credential-already-in-use') {
+      showToast('Este e-mail já tem senha. Use o botão "Entrar".', 'warning');
+    } else if (err?.code === 'auth/requires-recent-login') {
+      showToast('Entre com a sua conta do Google para confirmar que é você', 'warning');
+    } else {
+      showToast(friendlyAuthError(err), 'error');
+    }
+  } finally {
+    setEmailLoading(false);
+  }
+}
+
+function friendlyAuthError(err) {
+  const map = {
+    'auth/user-not-found': 'Conta não encontrada. Crie uma conta.',
+    'auth/wrong-password': 'Senha incorreta.',
+    'auth/invalid-email': 'E-mail inválido.',
+    'auth/invalid-credential': 'E-mail ou senha incorretos.',
+    'auth/too-many-requests': 'Muitas tentativas. Tente mais tarde.',
+    'auth/network-request-failed': 'Sem conexão. Tente novamente.',
+    'auth/weak-password': 'Senha muito fraca (mínimo 6 caracteres).',
+    'auth/missing-password': 'Digite a senha.',
+    'auth/operation-not-allowed': 'Login por e-mail desativado. Ative em Authentication → E-mail/Senha.',
+    'auth/email-already-in-use': 'Este e-mail já tem uma conta. Faça login.',
+    'auth/account-exists-with-different-credential': 'Este e-mail já tem conta com outro método (ex: Google).'
+  };
+  return map[err?.code] || 'Não foi possível concluir. Tente novamente.';
+}
+
+function setEmailLoading(loading) {
+  if (els.btnAuthLogin) els.btnAuthLogin.disabled = loading;
+  if (els.btnAuthRegister) els.btnAuthRegister.disabled = loading;
+}
+
+function updateAuthInputsLabel() {
+  // Placeholder de confirmação após criar conta (limpa campo de senha)
+  if (els.authPassword) els.authPassword.value = '';
+}
+
+async function handleLogout() {
+  try {
+    await signOutUser();
+    showToast('Desconectado', 'info');
+  } catch (err) {
+    console.error('Erro no logout:', err);
+  }
+}
+
+// ===== Handler URL Cifra =====
+
+async function handleFetchFromUrl() {
+  const url = els.inputCifraUrl.value.trim();
+  if (!url) {
+    showToast('Cole a URL da cifra', 'warning');
+    return;
+  }
+  
+  // Extrai artist/song da URL
+  const match = url.match(/cifraclub\.com\.br\/([^\/]+)\/([^\/]+)/);
+  if (!match) {
+    showToast('URL inválida. Use: https://www.cifraclub.com.br/artista/musica/', 'error');
+    return;
+  }
+  
+  const [, artist, song] = match;
+  els.inputCifraUrl.value = '';
   
   setSearchLoading(true);
   hideError();
   
   try {
-    const artistSlug = toSlug(artist);
-    const songSlug = toSlug(song);
-    
-    const data = await fetchSong(artistSlug, songSlug);
+    const data = await fetchSong(artist, song);
     const parsed = parseSongResponse(data);
-    
     state.currentSongData = parsed;
     state.currentTransposeSemitones = 0;
     state.currentTransposeMap = {};
-    
     renderPreview(parsed);
-    showToast(`Encontrado: ${parsed.metadata.name} - ${parsed.metadata.artist}`, 'success');
   } catch (err) {
     showError(err.message);
     showToast('Não foi possível buscar a cifra', 'error');
@@ -189,64 +565,233 @@ async function handleSearch(e) {
     setSearchLoading(false);
   }
 }
+function handleAuthChange(user) {
+  console.log('[singfy] handleAuthChange: user =', user ? user.email : null);
+  if (user) {
+    els.loginButtons.hidden = true;
+    els.btnShareHome.hidden = false;
+    // Navega para a home do usuário (setlist pessoal) após login
+    if (state.currentScreen === 'login') {
+      showMySetlists();
+    }
+  } else {
+    els.loginButtons.hidden = false;
+    els.btnShareHome.hidden = true;
+    // Volta para login se deslogar
+    if (state.currentScreen !== 'login') {
+      showScreen('login');
+    }
+  }
+}
+
+async function joinSessionFromUrl(sessionId) {
+  const { joinSession } = await import('./session.js');
+  const { getCurrentUser } = await import('./auth.js?v=20260905');
+  
+  const user = getCurrentUser();
+  if (!user) {
+    sessionStorage.setItem('pendingSessionId', sessionId);
+    return;
+  }
+  
+  try {
+    const result = await joinSession(sessionId, user.uid);
+    if (result.setlist) {
+      const { setlist } = await import('./setlist.js');
+      setlist.import(JSON.stringify(result.setlist));
+      updateSetlistBadge();
+      renderSetlist();
+      showToast('Entrou na sessão!', 'success');
+    }
+  } catch (err) {
+    console.error('Erro ao entrar na sessão:', err);
+    showToast('Sessão não encontrada ou expirada', 'error');
+  }
+}
+
+
+// Intercepta cliques em links do Cifra Club dentro do gcse-search do Google
+function setupCifraLinkInterceptor() {
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest && e.target.closest('a[href]');
+    if (!a) return;
+    let href = a.getAttribute('href') || '';
+    const qMatch = href.match(/[?&]q=([^&]+)/);
+    if (qMatch) {
+      try { href = decodeURIComponent(qMatch[1]); } catch (_) { href = qMatch[1]; }
+    }
+    if (/cifraclub\.com\.br\//i.test(href)) {
+      e.preventDefault();
+      e.stopPropagation();
+      importCifraFromUrl(href);
+    }
+  }, true);
+}
+
+async function importCifraFromUrl(url) {
+  if (!url) return;
+  hideError();
+  try {
+    const match = url.match(/cifraclub\.com\.br\/([^\/]+)\/([^\/]+)/);
+    if (!match) {
+      showToast('Link não é uma cifra do Cifra Club. Coloque na caixa de URL.', 'error');
+      return;
+    }
+    const [, artist, song] = match;
+    const data = await fetchSong(artist, song);
+    const parsed = parseSongResponse(data);
+    state.currentSongData = parsed;
+    state.currentTransposeSemitones = 0;
+    state.currentTransposeMap = {};
+    renderPreview(parsed);
+    clearGcseSearch();
+  } catch (err) {
+    showError(err.message);
+    showToast('Não foi possível importar esta cifra', 'error');
+  }
+}
+
+async function handleSpotifyImport() {
+  const url = (els.inputSpotifyUrl && els.inputSpotifyUrl.value || '').trim();
+  if (!url) { showToast('Cole o link da playlist do Spotify', 'error'); return; }
+
+  const playlistId = extractSpotifyPlaylistId(url);
+  if (!playlistId) { showToast('Link de playlist do Spotify inválido', 'error'); return; }
+
+  hideError();
+  if (els.btnFetchSpotify) els.btnFetchSpotify.disabled = true;
+  if (els.spotifyProgress) {
+    els.spotifyProgress.hidden = false;
+    els.spotifyProgress.textContent = 'Lendo playlist...';
+  }
+
+  let tracks;
+  try {
+    tracks = await fetchSpotifyPlaylistTracks(playlistId);
+  } catch (err) {
+    showToast(err.message || 'Não foi possível ler a playlist', 'error');
+    if (els.btnFetchSpotify) els.btnFetchSpotify.disabled = false;
+    return;
+  }
+
+  if (!tracks.length) {
+    showToast('Nenhuma faixa encontrada nesta playlist', 'error');
+    if (els.btnFetchSpotify) els.btnFetchSpotify.disabled = false;
+    return;
+  }
+
+  let ok = 0, fail = 0, dup = 0;
+  const failedTracks = [];
+  for (let i = 0; i < tracks.length; i++) {
+    const t = tracks[i];
+    if (els.spotifyProgress) {
+      els.spotifyProgress.textContent = `Buscando ${i + 1}/${tracks.length}: ${t.title}`;
+    }
+    try {
+      const parsed = await fetchSong(t.artist, t.title);
+      if (parsed && parsed.lines && parsed.lines.length > 0) {
+        const added = addSongToSetlist(parsed);
+        if (added) {
+          ok++;
+        } else {
+          dup++;
+        }
+      } else {
+        fail++;
+        failedTracks.push(`${t.title} - ${t.artist}`);
+        console.warn('Sem cifra válida para', t.title);
+      }
+    } catch (err) {
+      fail++;
+      failedTracks.push(`${t.title} - ${t.artist}`);
+      console.warn('Falha ao buscar', t.title, err);
+    }
+  }
+
+  try {
+    if (els.spotifyProgress) els.spotifyProgress.hidden = true;
+    if (els.btnFetchSpotify) els.btnFetchSpotify.disabled = false;
+    renderSetlist();
+    updateSetlistBadge();
+    if (els.inputSpotifyUrl) els.inputSpotifyUrl.value = '';
+
+    if (ok > 0) {
+      showToast(`Playlist importada: ${ok} música(s) adicionada(s)${dup ? `, ${dup} já estavam` : ''}${fail ? `, ${fail} não encontrada(s)` : ''}`, 'success');
+      showScreen('setlist');
+    } else if (dup > 0 && fail === 0) {
+      showToast(`Todas as músicas já estavam no setlist (${dup})`, 'info');
+      showScreen('setlist');
+    } else {
+      showToast('Nenhuma música da playlist foi encontrada no Cifra Club', 'error');
+    }
+    if (fail > 0) console.warn('Não encontradas:', failedTracks.join(' | '));
+  } catch (err) {
+    console.warn('Erro ao finalizar importação', err);
+  }
+}
+
+function addSongToSetlist(parsed) {
+  const metadata = parsed.metadata || {
+    name: parsed.name,
+    artist: parsed.artist,
+    tom: parsed.tom
+  };
+  const lines = normalizeLines(parsed.lines);
+  return setlist.add({ metadata, lines });
+}
 
 function setSearchLoading(loading) {
+  if (!els.btnSearch) return;
   els.btnSearch.disabled = loading;
   els.btnSearch.querySelector('.btn-text').textContent = loading ? 'Buscando...' : 'Buscar cifra';
   els.btnSearch.querySelector('.spinner').hidden = !loading;
 }
 
 function showError(msg) {
-  els.searchError.textContent = msg;
-  els.searchError.hidden = false;
-  els.searchResult.hidden = true;
+  showToast(msg, 'error');
 }
 
 function hideError() {
-  els.searchError.hidden = true;
+  // Sem contêiner dedicado de erro: mensagens vão por toast.
 }
 
+// Após importar/buscar uma cifra, adiciona diretamente à setlist e navega.
 function renderPreview(parsed) {
-  const { metadata, lines } = parsed;
-  const html = linesToClassic(lines);
-  const uniqueChords = extractUniqueChords(lines);
-  
-  els.searchResult.innerHTML = `
-    <div class="preview-card">
-      <div class="preview-header">
-        <div>
-          <h3 class="preview-title">${escapeHtml(metadata.name)}</h3>
-          <div class="preview-meta">
-            <span class="meta-tag">${escapeHtml(metadata.artist)}</span>
-            ${metadata.tom ? `<span class="meta-tag">Tom: ${escapeHtml(metadata.tom)}</span>` : ''}
-            <span class="meta-tag">${uniqueChords.length} acordes</span>
-          </div>
-        </div>
-      </div>
-      <div class="preview-cifra">${html}</div>
-      <div class="preview-actions">
-        <button type="button" class="btn btn-primary" id="btn-add-setlist">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-          Adicionar ao Setlist
-        </button>
-        <button type="button" class="btn btn-ghost" id="btn-new-search">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-          Nova busca
-        </button>
-      </div>
-    </div>
-  `;
-  
-  els.searchResult.hidden = false;
-  
-  // Eventos dos botões
-  document.getElementById('btn-add-setlist').addEventListener('click', () => addToSetlist(parsed));
-  document.getElementById('btn-new-search').addEventListener('click', () => {
-    els.searchResult.hidden = true;
-    els.inputArtist.value = '';
-    els.inputSong.value = '';
-    els.inputArtist.focus();
+  addToSetlist(parsed);
+}
+
+// Esconde o buscador do Google (usado após importar uma cifra)
+function hideGcseSearch() {
+  if (els.gcseBox) els.gcseBox.style.display = 'none';
+  clearGcseResults();
+}
+
+// Mostra o buscador do Google de novo (já limpo)
+function showGcseSearch() {
+  if (!els.gcseBox) return;
+  els.gcseBox.style.display = '';
+  // Limpa após ficar visível para o CSE re-renderizar sem a última busca
+  requestAnimationFrame(() => {
+    clearGcseResults();
   });
+}
+
+// Tenta limpar os resultados do gcse-search (best-effort)
+function clearGcseResults() {
+  try {
+    if (window.google && google.search && google.search.cse) {
+      const el = google.search.cse.element.getElement(0);
+      if (el) {
+        el.execute('');
+        if (typeof el.clearAllResults === 'function') el.clearAllResults();
+      }
+    }
+  } catch (_) {}
+}
+
+// Compatibilidade (mantém funcionando chamadas antigas)
+function clearGcseSearch() {
+  hideGcseSearch();
 }
 
 function addToSetlist(parsed) {
@@ -263,29 +808,63 @@ function addToSetlist(parsed) {
 
 // ===== Setlist UI =====
 function updateSetlistBadge() {
-  const count = setlist.getAll().length;
+  const count = setlist.getAllPlaylists().reduce((sum, p) => sum + p.songCount, 0);
   els.setlistBadge.textContent = count;
   els.setlistBadge.hidden = count === 0;
+}
+
+function renderSetlistMeta() {
+  const active = setlist.getActive();
+  if (!active) {
+    if (els.setlistMeta) els.setlistMeta.hidden = true;
+    if (els.setlistEmpty) els.setlistEmpty.hidden = false;
+    return false;
+  }
+  if (els.setlistMeta) els.setlistMeta.hidden = false;
+  if (els.setlistMetaName) els.setlistMetaName.textContent = active.name || 'Sem nome';
+  if (els.setlistMetaVenue) {
+    els.setlistMetaVenue.textContent = active.venue || '';
+    els.setlistMetaVenue.hidden = !active.venue;
+  }
+  if (els.setlistMetaDate) {
+    els.setlistMetaDate.textContent = formatEventDate(active.eventDate);
+    els.setlistMetaDate.hidden = !active.eventDate;
+  }
+  return true;
+}
+
+function formatEventDate(dateStr) {
+  if (!dateStr) return '';
+  const parts = String(dateStr).split('-');
+  if (parts.length !== 3) return dateStr;
+  return `${parts[2]}/${parts[1]}/${parts[0]}`;
 }
 
 function renderSetlist() {
   const songs = setlist.getAll();
   const currentIdx = setlist.getCurrentIndex();
+  const hasActive = renderSetlistMeta();
   
   if (songs.length === 0) {
     els.setlistList.innerHTML = '';
     els.setlistEmpty.hidden = false;
+    if (els.btnAddMusic) els.btnAddMusic.hidden = true;
     return;
   }
   
   els.setlistEmpty.hidden = true;
+  if (els.btnAddMusic) els.btnAddMusic.hidden = false;
   
   els.setlistList.innerHTML = songs.map((song, idx) => {
+    const meta = song && song.metadata ? song.metadata : {};
     const effectiveKey = getEffectiveKeyForSong(song);
     const isCurrent = idx === currentIdx;
+    const title = meta.name ? meta.name : (song && song.title ? song.title : 'Sem nome');
+    const artist = meta.artist ? meta.artist : (song && song.artist ? song.artist : 'Desconhecido');
     
     return `
       <li class="setlist-item${isCurrent ? ' current' : ''}" data-id="${song.id}" draggable="true">
+        <span class="setlist-num" aria-hidden="true">${idx + 1}</span>
         <span class="setlist-drag" aria-label="Reordenar">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="9" cy="5" r="1"/><circle cx="15" cy="5" r="1"/>
@@ -294,8 +873,8 @@ function renderSetlist() {
           </svg>
         </span>
         <div class="setlist-info">
-          <div class="setlist-song-title">${escapeHtml(song.metadata.name)}</div>
-          <div class="setlist-song-artist">${escapeHtml(song.metadata.artist)}</div>
+          <div class="setlist-song-title">${escapeHtml(title)}</div>
+          <div class="setlist-song-artist">${escapeHtml(artist)}</div>
           <div class="setlist-song-key">${effectiveKey || '—'}${song.transpose !== 0 ? ` (${song.transpose > 0 ? '+' : ''}${song.transpose})` : ''}</div>
         </div>
         <div class="setlist-actions">
@@ -315,30 +894,28 @@ function renderSetlist() {
       </li>
     `;
   }).join('');
-  
-  // Eventos dos botões
-  els.setlistList.querySelectorAll('[data-action]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const li = btn.closest('.setlist-item');
-      const id = li.dataset.id;
-      handleSetlistAction(id, btn.dataset.action);
-    });
-  });
-  
-  // Click no item = editar/ver
-  els.setlistList.querySelectorAll('.setlist-item > .setlist-info, .setlist-item > .setlist-drag').forEach(el => {
-    el.addEventListener('click', (e) => {
-      const li = e.currentTarget.closest('.setlist-item');
-      const id = li.dataset.id;
-      setlist.setCurrent(setlist.getAll().findIndex(s => s.id === id));
-      renderSetlist();
-    });
-  });
+
+  // Garante que a lista comece no topo após renderizar
+  if (els.setlistMain) els.setlistMain.scrollTop = 0;
 }
 
 function handleSetlistClick(e) {
-  // Delegação para itens sem ação específica
+  const actionBtn = e.target.closest && e.target.closest('[data-action]');
+  if (actionBtn) {
+    const li = actionBtn.closest('.setlist-item');
+    if (li && li.dataset.id) {
+      handleSetlistAction(li.dataset.id, actionBtn.dataset.action);
+    }
+    return;
+  }
+  // Clique na área do item (info/drag) abre o modo show
+  const item = e.target.closest && e.target.closest('.setlist-item');
+  if (item && item.dataset.id) {
+    const id = item.dataset.id;
+    setlist.setCurrent(setlist.getAll().findIndex(s => s.id === id));
+    updateSetlistBadge();
+    handleStartShow();
+  }
 }
 
 function handleSetlistAction(id, action) {
@@ -367,12 +944,189 @@ function handleSetlistAction(id, action) {
 
 function handleClearSetlist() {
   if (setlist.getAll().length === 0) return;
-  if (confirm('Limpar todo o setlist?')) {
+  if (confirm('Limpar todas as músicas desta setlist?')) {
     setlist.clear();
     updateSetlistBadge();
     renderSetlist();
-    showToast('Setlist limpo', 'info');
+    showToast('Setlist limpa', 'info');
   }
+}
+
+// ==== Minhas Setlists (visão geral) ====
+
+function showMySetlists() {
+  renderMySetlists();
+  showScreen('my-setlists');
+}
+
+function renderMySetlists() {
+  const playlists = setlist.getAllPlaylists();
+  const empty = document.getElementById('my-setlists-empty');
+  const list = document.getElementById('my-setlists-list');
+
+  if (playlists.length === 0) {
+    if (list) list.innerHTML = '';
+    if (empty) empty.hidden = false;
+    return;
+  }
+
+  if (empty) empty.hidden = true;
+  list.innerHTML = playlists.map(p => `
+    <div class="setlist-card" data-id="${p.id}">
+      <div class="setlist-card-head">
+        <h3 class="setlist-card-name">${escapeHtml(p.name)}</h3>
+        <div class="setlist-card-actions">
+          <button class="iconbtn setlist-card-delete" data-action="delete" title="Excluir setlist" aria-label="Excluir setlist">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="setlist-card-meta">
+        <span class="setlist-card-badge">${p.songCount} ${p.songCount === 1 ? 'música' : 'músicas'}</span>
+        ${p.venue ? `<span class="setlist-card-venue">${escapeHtml(p.venue)}</span>` : ''}
+        ${p.eventDate ? `<span class="setlist-card-date">${formatEventDate(p.eventDate)}</span>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function handleMySetlistsClick(e) {
+  const deleteBtn = e.target.closest('[data-action="delete"]');
+  if (deleteBtn) {
+    e.stopPropagation();
+    const card = deleteBtn.closest('.setlist-card');
+    const id = card.dataset.id;
+    if (confirm('Excluir esta setlist? Esta ação não pode ser desfeita.')) {
+      setlist.deletePlaylist(id);
+      renderMySetlists();
+      updateSetlistBadge();
+      showToast('Setlist excluída', 'info');
+    }
+    return;
+  }
+
+  const card = e.target.closest('.setlist-card');
+  if (card) {
+    const id = card.dataset.id;
+    setlist.setActive(id);
+    renderSetlist();
+    updateSetlistBadge();
+    showScreen('setlist');
+  }
+}
+
+// ==== Modal Nova / Editar Setlist ====
+
+let editingSetlistId = null;
+
+function openSetlistModal(playlist) {
+  editingSetlistId = playlist ? playlist.id : null;
+  if (els.setlistModalTitle) {
+    els.setlistModalTitle.textContent = playlist ? 'Editar Setlist' : 'Nova Setlist';
+  }
+  if (els.setlistModalName) els.setlistModalName.value = playlist ? playlist.name : '';
+  if (els.setlistModalDate) els.setlistModalDate.value = playlist ? (playlist.eventDate || '') : '';
+  if (els.setlistModalVenue) els.setlistModalVenue.value = playlist ? (playlist.venue || '') : '';
+  if (els.setlistModalSave) els.setlistModalSave.textContent = playlist ? 'Salvar' : 'Criar setlist';
+  if (els.setlistModal) els.setlistModal.hidden = false;
+  if (els.setlistModalName) setTimeout(() => els.setlistModalName.focus(), 50);
+}
+
+function closeSetlistModal() {
+  if (els.setlistModal) els.setlistModal.hidden = true;
+  editingSetlistId = null;
+}
+
+function handleSetlistModalSubmit(e) {
+  e.preventDefault();
+  const name = (els.setlistModalName.value || '').trim();
+  const eventDate = els.setlistModalDate.value || '';
+  const venue = (els.setlistModalVenue.value || '').trim();
+
+  if (editingSetlistId) {
+    setlist.updatePlaylist(editingSetlistId, {
+      name: name || 'Sem nome',
+      eventDate,
+      venue
+    });
+    renderSetlist();
+    updateSetlistBadge();
+    showToast('Setlist atualizada', 'success');
+  } else {
+    if (!name) {
+      showToast('Dê um nome à setlist', 'warning');
+      return;
+    }
+    setlist.createPlaylist(name, eventDate, venue);
+    renderSetlist();
+    updateSetlistBadge();
+    showScreen('setlist');
+    showToast('Setlist criada', 'success');
+  }
+  closeSetlistModal();
+}
+
+async function handleShareSession() {
+  const { createSession, getInviteLink } = await import('./session.js');
+  const { getCurrentUser: getAuthUser } = await import('./auth.js?v=20260905');
+  
+  const user = getAuthUser();
+  if (!user) {
+    showToast('Faça login para compartilhar', 'warning');
+    return;
+  }
+  
+  const setlistData = setlist.export();
+  try {
+    const sessionId = await createSession(user.uid, setlistData);
+    const link = getInviteLink(sessionId);
+    
+    // Copia para clipboard
+    await navigator.clipboard.writeText(link);
+    showToast('Link copiado! Envie para a banda', 'success');
+    
+    // Mostra modal com o link
+    showShareModal(link);
+  } catch (err) {
+    console.error('Erro ao criar sessão:', err);
+    showToast('Erro ao criar sessão', 'error');
+  }
+}
+
+function showShareModal(link) {
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal" role="dialog" aria-labelledby="modal-title" aria-modal="true">
+      <h3 id="modal-title">Compartilhar Setlist</h3>
+      <p>Envie este link para os membros da banda entrarem na sessão:</p>
+      <div class="modal-link">
+        <input type="text" value="${link}" readonly id="modal-link-input">
+        <button class="btn btn-ghost" id="modal-copy">Copiar</button>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="modal-close">Fechar</button>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(modal);
+  
+  // Focus e seleciona
+  setTimeout(() => {
+    const input = document.getElementById('modal-link-input');
+    input.select();
+  }, 50);
+  
+  modal.querySelector('#modal-copy').addEventListener('click', async () => {
+    await navigator.clipboard.writeText(link);
+    showToast('Copiado!', 'success');
+  });
+  
+  modal.querySelector('#modal-close').addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) modal.remove();
+  });
 }
 
 // ===== Modo Show =====
@@ -391,8 +1145,17 @@ function handleStartShow() {
 }
 
 function startShowMode() {
-  loadCurrentSong();
-  initPlayer();
+  try {
+    loadCurrentSong();
+    applyCifraPrefs();
+  } catch (err) {
+    console.error('Erro ao carregar música no show mode:', err);
+  }
+  try {
+    initPlayer();
+  } catch (err) {
+    console.error('Erro ao iniciar player:', err);
+  }
   setupAutoHideBars();
   requestWakeLock();
 }
@@ -402,6 +1165,7 @@ function stopShowMode() {
     state.player.stop();
     state.player = null;
   }
+  if (state.voiceSync) state.voiceSync.stop();
   releaseWakeLock();
 }
 
@@ -413,6 +1177,12 @@ function loadCurrentSong() {
     metadata: song.metadata,
     lines: song.lines
   };
+
+  // Carrega a última velocidade registrada para esta música (rolagem ao vivo)
+  state.savedSpeed = song.speed || 1.0;
+
+  // Mantém o sincronizador de voz atualizado com a letra da música atual.
+  if (state.voiceSync) state.voiceSync.setLyrics(song.lines || []);
   
   // Aplica transposição salva
   const semitones = song.transpose || 0;
@@ -428,6 +1198,10 @@ function loadCurrentSong() {
   renderShowCifra();
   updateShowInfo();
   renderTransposeButtons();
+
+  // Toda vez que uma música é carregada, a cifra aparece no topo
+  if (els.showScrollContainer) els.showScrollContainer.scrollTop = 0;
+  if (state.player) state.player.scrollTop = 0;
 }
 
 function getEffectiveKeyForSong(song) {
@@ -454,11 +1228,25 @@ function renderShowCifra() {
   
   const html = linesToClassic(state.currentSongData.lines, state.currentTransposeMap);
   els.showCifraContent.innerHTML = html;
-  
+  markSectionLines();
+
   // Atualiza player com nova altura
   if (state.player) {
     state.player.updateMaxScroll();
   }
+}
+
+// Detecta linhas de seção (Verso, Refrão, Ponte, etc.) por heurística de
+// texto e marca com a classe .cifra-section para dar destaque/espaçamento.
+function markSectionLines() {
+  const rows = els.showCifraContent.querySelectorAll('.cifra-line');
+  rows.forEach(row => {
+    const textEl = row.querySelector('.chunk .txt') || row.querySelector('.text-row') || row;
+    const text = textEl ? textEl.textContent.trim() : '';
+    if (isSectionLike(text)) {
+      row.classList.add('cifra-section');
+    }
+  });
 }
 
 function updateShowInfo() {
@@ -471,27 +1259,62 @@ function updateShowInfo() {
   els.showSongArtist.textContent = song?.metadata?.artist || '—';
 }
 
-function renderTransposeButtons() {
+ function renderTransposeButtons() {
   const song = setlist.currentSong();
   const originalKey = song?.metadata?.tom || 'C';
   const currentKey = transposeKeyBySemitones(originalKey, state.currentTransposeSemitones);
-  
-  const buttons = generateTransposeButtons(currentKey, (semitones) => {
-    applyTranspose(semitones);
-  });
-  
-  els.transposeButtons.innerHTML = buttons.map(btn => `
-    <button type="button" class="transpose-btn${btn.active ? ' active' : ''}" 
-            data-semitones="${btn.semitones}" 
-            aria-label="${btn.label} semitons"
-            title="${btn.key}">
-      ${btn.label}
-    </button>
-  `).join('');
-  
-  els.transposeButtons.querySelectorAll('.transpose-btn').forEach(b => {
-    b.addEventListener('click', () => applyTranspose(parseInt(b.dataset.semitones, 10)));
-  });
+  if (els.tomNote) {
+    els.tomNote.textContent = currentKey || 'C';
+  }
+}
+
+// Cicla o tom pelos acordes do campo harmônico do tom original.
+// Ao apertar a nota, o tom avança para o próximo acorde do campo
+// harmônico (ex.: em C -> Dm -> Em -> F -> G -> Am -> B° ...).
+function cycleTom() {
+  const song = setlist.currentSong();
+  const originalKey = song?.metadata?.tom || 'C';
+  if (!originalKey) return;
+
+  const isMinor = originalKey.endsWith('m');
+  const field = getHarmonicField(originalKey, isMinor ? 'minor' : 'major');
+  if (!field) return;
+
+  // Extrai as notas raiz dos acordes do campo harmônico, na ordem.
+  const roots = [];
+  for (const deg of ['I','ii','iii','IV','V','vi','vii']) {
+    const chord = field[deg] || field[deg.toLowerCase()];
+    if (!chord) continue;
+    const root = chord.replace(/[m\d°#b+\-()]/g, '');
+    if (!roots.includes(root)) roots.push(root);
+  }
+  const fallback = isMinor ? ['C','D','D#','E','F','F#','G','G#','A','A#','B'] : roots;
+
+  // Tom atual (a nota raiz, ignorando menor).
+  const currentBase = originalKey.replace('m', '');
+  const currentKey = transposeKeyBySemitones(originalKey, state.currentTransposeSemitones);
+  const currentRoot = currentKey.replace('m', '');
+
+  const list = roots.length ? roots : fallback;
+  let idx = list.indexOf(currentRoot);
+  if (idx === -1) idx = 0;
+  const nextRoot = list[(idx + 1) % list.length];
+
+  // Transpõe para que a nota original vire nextRoot (mesmo semitom preserva o modo).
+  const semis = semitoneDistance(currentBase, nextRoot);
+  applyTranspose(semis);
+}
+
+// Calcula distância em semitons entre duas notas (base, sem sufixo de menor).
+function semitoneDistance(from, to) {
+  const NOTES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const ENH = { 'Db':'C#','Eb':'D#','Gb':'F#','Ab':'G#','Bb':'A#' };
+  const f = ENH[from] || from;
+  const t = ENH[to] || to;
+  const fi = NOTES.indexOf(f);
+  const ti = NOTES.indexOf(t);
+  if (fi === -1 || ti === -1) return 0;
+  return (ti - fi + 12) % 12;
 }
 
 function applyTranspose(semitones) {
@@ -519,12 +1342,14 @@ function applyTranspose(semitones) {
 function initPlayer() {
   state.player = new AutoRollPlayer({
     container: els.showScrollContainer,
+    autoScroll: true,
     duration: estimateDurationFromSong(setlist.currentSong()),
     onPositionChange: (progress) => {
       els.showProgressFill.style.height = `${progress * 100}%`;
     },
     onSongEnd: () => {
-      handleNextSong();
+      // Ao terminar a rolagem, para sem avançar automaticamente para a próxima música.
+      updatePlayPauseIcon(false);
     },
     onSilence: () => {
       // Silêncio detectado - opcional: auto-pular
@@ -540,9 +1365,13 @@ function initPlayer() {
     }
   });
   
+  // Reaplica o último tempo (velocidade de rolagem) lembrado
+  const saved = state.savedSpeed || 1.0;
+  state.player.setSpeed(saved);
+  
   // Atualiza controles
   updatePlayPauseIcon(false);
-  els.speedValue.textContent = '1.0x';
+  els.speedValue.textContent = `${state.player.speed.toFixed(1)}x`;
 }
 
 function estimateDurationFromSong(song) {
@@ -571,23 +1400,258 @@ function updatePlayPauseIcon(playing) {
   els.showPlayPause.setAttribute('aria-label', playing ? 'Pausar' : 'Tocar');
 }
 
+function rememberSpeed(speed) {
+  state.savedSpeed = speed;
+  const song = setlist.currentSong();
+  if (song && song.id) setlist.setSpeed(song.id, speed);
+}
+
+// Aplica ao player a última velocidade registrada para a música atual.
+function applyCurrentSpeed() {
+  if (!state.player) return;
+  state.player.setSpeed(state.savedSpeed);
+  els.speedValue.textContent = `${state.player.speed.toFixed(1)}x`;
+}
+
 function adjustSpeed(delta) {
   if (!state.player) return;
   const newSpeed = Math.max(0.25, Math.min(3, state.player.speed + delta));
   state.player.setSpeed(newSpeed);
   els.speedValue.textContent = `${newSpeed.toFixed(1)}x`;
+  rememberSpeed(newSpeed);
+}
+
+function handleTapTempo() {
+  if (!state.player) return;
+  state.tapTempo.tap();
+  const bpm = state.tapTempo.getBPM();
+  if (bpm) {
+    const speed = Math.max(0.25, Math.min(3, bpm / 120));
+    state.player.setSpeed(speed);
+    els.speedValue.textContent = `${speed.toFixed(1)}x`;
+    rememberSpeed(speed);
+    showToast(`BPM: ${bpm}`, 'info');
+  } else {
+    showToast('Toque novamente para definir o andamento', 'info');
+  }
+}
+
+function handleMidiToggle() {
+  if (state.midiConnected) {
+    state.midi.disconnect();
+    state.midiConnected = false;
+    state.midi.onDisconnect = null;
+    hideMidiDebug();
+    if (els.btnMidi) {
+      els.btnMidi.classList.remove('active');
+      els.btnMidi.setAttribute('aria-pressed', 'false');
+    }
+    showToast('MIDI desconectado', 'info');
+    return;
+  }
+  state.midi.onDisconnect = handleMidiDisconnect;
+  state.midi.connect()
+    .then(async (result) => {
+      state.midiConnected = true;
+      state.midi.onCommand = handleMidiCommand;
+      state.midi.onMidiPacket = handleMidiPacket;
+      if (els.btnMidi) {
+        els.btnMidi.classList.add('active');
+        els.btnMidi.setAttribute('aria-pressed', 'true');
+      }
+      if (result.transport === 'bluetooth') {
+        showToast(`MIDI via Bluetooth (${result.device})`, 'success');
+        const dbg = document.getElementById('midi-debug');
+        if (dbg) {
+          dbg.hidden = false;
+          dbg.textContent = 'MIDI conectado: ' + result.device + ' — verificando...';
+        }
+        let st = '';
+        try { st = await state.midi.bleNotifyStatus(); } catch (_) {}
+        if (dbg) dbg.textContent = 'MIDI conectado: ' + result.device + ' — ' + st;
+      } else {
+        const names = (result.inputs || []).slice(0, 3).join(', ');
+        showToast(`MIDI: ${names || result.inputs.length + ' entrada'}`, 'success');
+      }
+    })
+    .catch((err) => {
+      state.midi.onDisconnect = null;
+      showToast('Falha ao conectar MIDI: ' + (err && err.message ? err.message : 'erro'), 'error');
+    });
+}
+
+function handleMidiDisconnect() {
+  state.midiConnected = false;
+  hideMidiDebug();
+  if (els.btnMidi) {
+    els.btnMidi.classList.remove('active');
+    els.btnMidi.setAttribute('aria-pressed', 'false');
+  }
+  showToast('Controle MIDI desconectado (Bluetooth caiu)', 'warning');
+}
+
+function fmtHex(u8) {
+  return Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join(' ');
+}
+
+// Mostra o último pacote Bluetooth recebido + decode na barra de diagnóstico
+function handleMidiPacket(u8, messages, label) {
+  const dbg = document.getElementById('midi-debug');
+  if (!dbg) return;
+  const parts = [`${label || 'bt'} ${fmtHex(u8)}`];
+  if (messages && messages.length) {
+    parts.push('→ ' + messages.map((m) => fmtHex(Uint8Array.from(m))).join(' + '));
+    if (state.lastMidiCommand) parts.push('⇒ ' + state.lastMidiCommand);
+  } else {
+    parts.push('→ sem msg MIDI');
+  }
+  dbg.textContent = 'MIDI ' + parts.join(' ');
+  dbg.hidden = false;
+  if (messages && messages.length) {
+    showToast('MIDI: ' + (state.lastMidiCommand || 'recebido'), 'success');
+  } else {
+    showToast('MIDI: pacote sem comando (' + fmtHex(u8) + ')', 'warning');
+  }
+}
+
+function hideMidiDebug() {
+  const dbg = document.getElementById('midi-debug');
+  if (dbg) dbg.hidden = true;
+}
+
+function handleMidiCommand(command) {
+  state.lastMidiCommand = command || null;
+  // Comandos MIDI só fazem sentido no show mode
+  if (state.currentScreen !== 'show') return;
+  switch (command) {
+    case 'play':
+      if (state.player && !state.player.isPlaying) {
+        state.player.start();
+        updatePlayPauseIcon(true);
+        requestWakeLock();
+      }
+      break;
+    case 'stop':
+      if (state.player && state.player.isPlaying) {
+        state.player.pause();
+        updatePlayPauseIcon(false);
+      }
+      break;
+    case 'hideChords':
+      state.lyricsOnly = true;
+      applyCifraPrefs();
+      if (state.player) state.player.updateMaxScroll();
+      break;
+    case 'showChords':
+      state.lyricsOnly = false;
+      applyCifraPrefs();
+      if (state.player) state.player.updateMaxScroll();
+      break;
+    case 'speedDown':
+      adjustSpeed(-0.1);
+      break;
+    case 'speedUp':
+      adjustSpeed(0.1);
+      break;
+    case 'prevSong':
+      handlePrevSong();
+      break;
+    case 'nextSong':
+      handleNextSong();
+      break;
+  }
+}
+
+function adjustFontSize(delta) {
+  state.cifraSize = Math.max(12, Math.min(34, state.cifraSize + delta));
+  savePref('cifraSize', state.cifraSize);
+  applyCifraPrefs();
+}
+
+function toggleHideTabs() {
+  state.hideTabs = !state.hideTabs;
+  savePref('hideTabs', state.hideTabs);
+  applyCifraPrefs();
+}
+
+// Aplica tamanho de fonte, ocultação de tabs e modo só-letra no container da cifra
+function applyCifraPrefs() {
+  if (els.showScrollContainer) {
+    els.showScrollContainer.style.setProperty('--cifra-size', state.cifraSize + 'px');
+    els.showScrollContainer.classList.toggle('hide-tabs', state.hideTabs);
+    els.showScrollContainer.classList.toggle('lyrics-only', state.lyricsOnly);
+  }
+  if (els.fontValue) els.fontValue.textContent = String(state.cifraSize);
+  if (els.showHideTabs) {
+    const hiding = state.hideTabs;
+    els.showHideTabs.classList.toggle('active', hiding);
+    els.showHideTabs.setAttribute('aria-pressed', String(hiding));
+    els.showHideTabs.textContent = hiding ? 'Mostrar tab' : 'Ocultar tab';
+  }
+  if (els.showToggleLetra) {
+    els.showToggleLetra.classList.toggle('active', state.lyricsOnly);
+    els.showToggleLetra.setAttribute('aria-pressed', String(state.lyricsOnly));
+    els.showToggleLetra.textContent = 'Ocultar cifra';
+  }
+}
+
+function toggleLyricsOnly() {
+  state.lyricsOnly = !state.lyricsOnly;
+  applyCifraPrefs();
+  if (state.player) state.player.updateMaxScroll();
+  showToast(state.lyricsOnly ? 'Mostrando apenas a letra' : 'Mostrando cifra e letra', 'info');
 }
 
 async function toggleMic() {
   if (!state.player) return;
-  
+
   const currentlyEnabled = els.micToggle.classList.contains('active');
-  await state.player.enableMic(!currentlyEnabled);
-  
-  els.micToggle.classList.toggle('active', !currentlyEnabled);
-  els.micToggle.setAttribute('aria-pressed', !currentlyEnabled);
-  
-  showToast(!currentlyEnabled ? 'Microfone ativado' : 'Microfone desativado', 'info');
+  const enable = !currentlyEnabled;
+
+  // Sincronização por voz via Web Speech API (se disponível).
+  if (!state.voiceSync) state.voiceSync = new VoiceSync({
+    onLine: (lineIdx, lyric) => {
+      if (els.showScrollContainer) {
+        syncScrollToLine(lineIdx);
+      }
+    }
+  });
+
+  const speechOk = state.voiceSync.isSupported();
+  if (enable) {
+    const song = setlist.currentSong();
+    if (song) state.voiceSync.setLyrics(song.lines || []);
+    if (speechOk) {
+      state.voiceSync.start();
+    } else if (!state.player.isPlaying) {
+      showToast('Reconhecimento de voz indisponível (use Chrome/Android)', 'warning');
+    }
+  } else {
+    state.voiceSync.stop();
+  }
+
+  await state.player.enableMic(enable);
+
+  els.micToggle.classList.toggle('active', enable);
+  els.micToggle.setAttribute('aria-pressed', String(enable));
+  els.micToggle.querySelector('.mic-label').textContent = enable ? 'Voz' : 'Mic';
+
+  showToast(enable ? 'Microfone ativado' : 'Microfone desativado', 'info');
+}
+
+// Rola o container do show até a linha correspondente.
+function syncScrollToLine(lineIdx) {
+  const container = els.showScrollContainer;
+  if (!container) return;
+  const rows = container.querySelectorAll('.cifra-line');
+  const row = rows[lineIdx];
+  if (row) {
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (state.player && state.player.isPlaying) {
+      const progress = container.scrollTop / (container.scrollHeight - container.clientHeight);
+      state.player.seek(progress);
+    }
+  }
 }
 
 function handleScroll() {
@@ -602,6 +1666,7 @@ function handlePrevSong() {
   const song = setlist.prev();
   if (song) {
     loadCurrentSong();
+    applyCurrentSpeed();
     if (state.player) {
       state.player.stop();
       updatePlayPauseIcon(false);
@@ -614,9 +1679,11 @@ function handleNextSong() {
   const song = setlist.next();
   if (song) {
     loadCurrentSong();
+    applyCurrentSpeed();
     if (state.player) {
-      state.player.start();
-      updatePlayPauseIcon(true);
+      // Fica pausado após trocar de música; o play é feito manualmente (botão/pedal MIDI).
+      state.player.stop();
+      updatePlayPauseIcon(false);
     }
     showToast(`Próxima: ${song.metadata.name}`, 'success');
   } else {
@@ -637,7 +1704,7 @@ function handleKeydown(e) {
   switch (e.key) {
     case 's':
     case 'S':
-      if (state.currentScreen !== 'setlist') showScreen('setlist');
+      if (state.currentScreen !== 'my-setlists' && state.currentScreen !== 'setlist') showMySetlists();
       break;
     case ' ':
       e.preventDefault();
@@ -663,7 +1730,7 @@ function handleKeydown(e) {
       break;
     case 'Escape':
       if (state.currentScreen === 'show') showScreen('setlist');
-      else if (state.currentScreen === 'setlist') showScreen('search');
+      else if (state.currentScreen === 'setlist') showMySetlists();
       break;
     case 'f':
     case 'F':

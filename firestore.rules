@@ -1,0 +1,25 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Usuários só acessam o próprio documento (sincronização de setlists)
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Sessões colaborativas (Compartilhar): usuário autenticado pode
+    // criar (host), ler (convidado entra pelo link) e atualizar.
+    match /sessions/{sessionId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null &&
+        (request.auth.uid == resource.data.hostId ||
+         request.auth.uid in resource.data.participants);
+      allow delete: if false;
+    }
+
+    // Bloqueio geral para qualquer outra coleção
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

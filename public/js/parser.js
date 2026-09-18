@@ -18,12 +18,13 @@ export function parseSongResponse(data) {
 }
 
 function parseLine(raw) {
-  // raw vem do backend: { entries: [{name, text}], letra }
+  // raw vem do backend: { entries: [{name, text, pos}], letra }
   // Normaliza para formato interno
   const chords = (raw.entries || []).map(e => ({
     name: normalizeChordName(e.name),
     display: e.text,
-    originalName: e.name
+    originalName: e.name,
+    pos: e.pos
   }));
   
   let text = raw.letra || "";
@@ -31,6 +32,17 @@ function parseLine(raw) {
   text = decodeHtmlEntities(text);
   
   return { chords, text, raw };
+}
+
+// Normaliza um array de linhas de qualquer formato ({entries,letra} ou {chords,text})
+// para o formato interno {chords, text, raw}.
+export function normalizeLines(lines) {
+  if (!Array.isArray(lines)) return [];
+  return lines.map(line => {
+    if (line.chords && line.text !== undefined) return line;
+    if (line.entries || line.letra) return parseLine(line);
+    return { chords: [], text: line.letra || line.text || "", raw: line };
+  });
 }
 
 function normalizeChordName(name) {
@@ -110,30 +122,45 @@ export function extractUniqueChords(lines) {
   return Array.from(set);
 }
 
-// Converte linhas para HTML renderizável (preserva acordes inline)
+// Detecta se uma linha é uma tablatura (tab) de guitarra/violão
+export function isTabLine(line) {
+  const text = (line.text || "").trim();
+  if (!text) return false;
+  // Linhas de tab começam por uma corda: E A D G B e (maiúscula ou minúscula),
+  // seguida de | ou -. Ex.: "E|----", "B|-12-", "A|--x--", "e|-----"
+  const startsWithString = /^[EeAaDdGgBb]{1,2}[\||-]/.test(text);
+  const hasLongDashes = text.replace(/\s/g, "").includes("----") && /[EeAaDdGgBb]/.test(text.charAt(0));
+  // Bloco de tab dominado por caracteres de tablatura
+  const tabChars = (text.match(/[-|xX*\/\\~rhp0-9]/g) || []).length;
+  const tabRatio = tabChars / text.length;
+  return startsWithString || hasLongDashes || (tabRatio > 0.55 && /[|xX*0-9-]/.test(text));
+}
+
+// Converte linhas para HTML renderizável (acordes inline na posição exata)
 export function linesToHtml(lines, transposeMap = {}) {
   return lines.map(line => {
-    let html = "";
-    let textIdx = 0;
+    const tabClass = isTabLine(line) ? ' tab-line' : '';
     const fullText = line.text;
+    let html = "";
+    let prev = 0;
     
-    line.chords.forEach((chord, i) => {
+    line.chords.forEach((chord) => {
       const chordName = transposeMap[chord.name] || chord.name;
-      const displayName = chord.display;
-      const pos = fullText.indexOf(displayName, textIdx);
-      
-      if (pos > textIdx) {
-        html += escapeHtml(fullText.slice(textIdx, pos));
+      const display = chord.display || chordName;
+      let pos = (typeof chord.pos === 'number') ? chord.pos : fullText.indexOf(display, prev);
+      if (pos < prev) pos = prev;
+      if (pos > prev && pos < fullText.length) {
+        html += escapeHtml(fullText.slice(prev, pos));
       }
       html += `<span class="chord" data-original="${escapeHtml(chord.name)}">${escapeHtml(chordName)}</span>`;
-      textIdx = pos + displayName.length;
+      prev = pos + display.length;
     });
     
-    if (textIdx < fullText.length) {
-      html += escapeHtml(fullText.slice(textIdx));
+    if (prev < fullText.length) {
+      html += escapeHtml(fullText.slice(prev));
     }
     
-    return `<div class="cifra-line">${html}</div>`;
+    return `<div class="cifra-line${tabClass}">${html}</div>`;
   }).join("");
 }
 
@@ -146,33 +173,79 @@ function escapeHtml(s) {
     .replace(/'/g, "'");
 }
 
-// Formata para exibição clássica (acordes acima, letra abaixo)
+const SECTION_WORDS = [
+  'verso', 'refr', 'ponte', 'solo', 'intro', 'final', 'instrumental',
+  'pré-refr', 'pre-refr', 'outro', 'pré'
+];
+
+// Detecta se um texto representa uma tag de seção (Verso, Refrão, Ponte, etc.).
+export function isSectionLike(text) {
+  if (!text) return false;
+  const trimmed = String(text).trim();
+  const t = trimmed.toLowerCase();
+  // Entre colchetes: [Verso 1], [Refrão]
+  if (/^\[.*\]$/.test(trimmed)) return true;
+  // Termina com ":" e contém palavra-chave (ex.: "Refrão:")
+  if (/^.{1,20}:$/.test(trimmed)) {
+    return SECTION_WORDS.some(w => t.includes(w));
+  }
+  // Contém palavra-chave de seção
+  return SECTION_WORDS.some(w => t.includes(w));
+}
+
+// Formata para exibição clássica (acordes acima da sílaba correspondente).
+// Cada acorde vira um "chunk" inline-flex com a letra que vem depois dele:
+// o texto quebra por palavra em vez de estourar o container. Antes a linha
+// de acordes usava white-space: pre com colunas fixas e qualquer linha mais
+// larga que a tela cortava letra/acorde à direita (overflow-x: hidden).
 export function linesToClassic(lines, transposeMap = {}) {
   return lines.map(line => {
-    if (line.chords.length === 0 && line.text.trim()) {
-      return `<div class="cifra-line classic-text">${escapeHtml(line.text)}</div>`;
+    const tabClass = isTabLine(line) ? ' tab-line' : '';
+    const textLines = String(line.text || '').split('\n');
+    const chords = line.chords || [];
+
+    // Linha só de letra (ou tab): quebra em vez de cortar
+    if (chords.length === 0) {
+      return `<div class="cifra-line classic-text${tabClass}">${escapeHtml(textLines.join('\n'))}</div>`;
     }
-    
-    // Constrói linha de acordes alinhada (aproximação)
-    let chordLine = "";
-    let textLine = line.text;
-    let lastPos = 0;
-    
-    line.chords.forEach(chord => {
-      const display = transposeMap[chord.name] || chord.name;
-      const pos = textLine.indexOf(chord.display, lastPos);
-      if (pos >= 0) {
-        const spaces = pos - lastPos;
-        chordLine += " ".repeat(spaces) + display;
-        lastPos = pos + chord.display.length;
-      }
+
+    const first = textLines[0] || '';
+    const firstLen = first.length;
+
+    // Normaliza posições (clamp na primeira linha, mantém ordem crescente)
+    let prev = 0;
+    const positions = chords.map(chord => {
+      let pos = typeof chord.pos === 'number' ? chord.pos : prev;
+      if (pos > firstLen) pos = firstLen;
+      if (pos < prev) pos = prev;
+      prev = pos;
+      return pos;
     });
-    
-    return `
-      <div class="cifra-line classic">
-        <div class="chord-row">${escapeHtml(chordLine)}</div>
-        <div class="text-row">${escapeHtml(textLine)}</div>
-      </div>
-    `;
+
+    let html = `<div class="cifra-line classic chunked${tabClass}">`;
+
+    // Letra antes do primeiro acorde (sem acorde no início da linha)
+    if (positions[0] > 0) {
+      html += `<span class="chunk"><span class="txt">${escapeHtml(first.slice(0, positions[0]))}</span></span>`;
+    }
+
+    chords.forEach((chord, i) => {
+      const display = transposeMap[chord.name] || chord.name;
+      const end = i + 1 < positions.length ? positions[i + 1] : firstLen;
+      const seg = first.slice(positions[i], end);
+      html += `<span class="chunk"><span class="chord" data-original="${escapeHtml(chord.name)}">${escapeHtml(display)}</span><span class="txt">${escapeHtml(seg)}</span></span>`;
+    });
+
+    // As linhas de letra seguintes (o parser agrupa várias linhas de letra
+    // sob os mesmos acordes) ficam no MESMO .cifra-line (para preservar o
+    // índice da linha no voice sync), cada uma quebrando para a linha de baixo
+    // via .nl, sem acorde próprio.
+    for (let i = 1; i < textLines.length; i++) {
+      const text = textLines[i];
+      if (text.trim() === '') continue;
+      html += `<span class="chunk nl"><span class="txt">${escapeHtml(text)}</span></span>`;
+    }
+    html += '</div>';
+    return html;
   }).join("");
 }
