@@ -59,6 +59,16 @@ export function getIsHost() {
 export async function createSession(userId, setlistData) {
   if (!ensureDb()) throw new Error('Firestore não inicializado');
   
+  // Encerra a sessão anterior deste host: quem ficou nela é avisado em vez
+  // de acompanhar uma sessão que ninguém mais transmite
+  if (currentSessionId && isHost) {
+    try {
+      await updateDoc(doc(db, 'sessions', currentSessionId), { isActive: false, updatedAt: serverTimestamp() });
+    } catch (err) {
+      console.warn('Não foi possível encerrar a sessão anterior:', err);
+    }
+  }
+  
   const sessionRef = await addDoc(collection(db, 'sessions'), {
     hostId: userId,
     setlist: setlistData,
@@ -172,6 +182,7 @@ export async function updateSessionPlayback(playback) {
     return true;
   } catch (err) {
     console.warn('Erro ao sincronizar reprodução:', err);
+    window.dispatchEvent(new CustomEvent('singfy:sync-failed', { detail: { code: err && err.code } }));
     return false;
   }
 }

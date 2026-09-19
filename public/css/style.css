@@ -1765,3 +1765,9 @@ body.sync-guest #btn-tap-tempo {
 @keyframes app-dialog-fade { from { opacity: 0; } }
 @keyframes app-dialog-pop { from { opacity: 0; transform: scale(0.94) translateY(8px); } }
 @media (prefers-reduced-motion: reduce) { .app-dialog, .app-dialog .modal { animation: none; } }
+
+/* Botão de compartilhar enquanto o link é criado */
+.is-busy { opacity: 0.6; cursor: progress; }
+.is-busy svg { animation: share-busy 1s ease-in-out infinite; }
+@keyframes share-busy { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .is-busy svg { animation: none; } }
