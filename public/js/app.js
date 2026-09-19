@@ -329,11 +329,30 @@ function bindEvents() {
 }
 
 // ===== Navegação de Telas =====
+// A splash cobre a tela (position: fixed); ao sair, a tela nova já fica
+// ativa por baixo e a splash some com fade + zoom. Fica no mínimo
+// SPLASH_MIN_MS para a animação não "piscar" quando o login é rápido.
+const SPLASH_MIN_MS = 900;
+const splashShownAt = performance.now();
+
+function hideSplash() {
+  const el = document.getElementById('screen-loading');
+  if (!el || !el.classList.contains('active') || el.classList.contains('leaving')) return;
+  const wait = Math.max(0, SPLASH_MIN_MS - (performance.now() - splashShownAt));
+  setTimeout(() => {
+    el.classList.add('leaving');
+    el.setAttribute('aria-busy', 'false');
+    setTimeout(() => el.classList.remove('active', 'leaving'), 460);
+  }, wait);
+}
+
 function showScreen(screenName) {
   const screens = ['loading', 'login', 'search', 'my-setlists', 'setlist', 'show'];
   screens.forEach(s => {
     const el = document.getElementById(`screen-${s}`);
-    if (el) el.classList.toggle('active', s === screenName);
+    if (!el) return;
+    if (s === 'loading' && screenName !== 'loading') { hideSplash(); return; }
+    el.classList.toggle('active', s === screenName);
   });
   
   state.currentScreen = screenName;

@@ -201,8 +201,9 @@ kbd {
   width: 28px; height: 28px;
   background: linear-gradient(135deg, var(--accent), #00a8cc);
   border-radius: var(--radius-sm);
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.5'%3E%3Cpath d='M12 2a10 10 0 0 1 10 10c0 3.5-2 6.5-5 8.5-3-2-5-5-5-8.5A10 10 0 0 1 12 2z'/%3E%3C/svg%3E") center/contain no-repeat;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.5'%3E%3Cpath d='M12 2a10 10 0 0 1 10 10c0 3.5-2 6.5-5 8.5-3-2-5-5-5-8.5A10 10 0 0 1 12 2z'/%3E%3C/svg%3E") center/contain no-repeat;
+  /* Palheta com equalizador vazado — mesma marca da tela de carregamento */
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath fill='white' fill-rule='evenodd' d='M50 10C73 10 90 18 90 37C90 60 68 84 56 93.5C52.5 96.3 47.5 96.3 44 93.5C32 84 10 60 10 37C10 18 27 10 50 10ZM25 41a3 3 0 0 1 6 0v10a3 3 0 0 1-6 0zM36 35a3 3 0 0 1 6 0v22a3 3 0 0 1-6 0zM47 30a3 3 0 0 1 6 0v32a3 3 0 0 1-6 0zM58 35a3 3 0 0 1 6 0v22a3 3 0 0 1-6 0zM69 41a3 3 0 0 1 6 0v10a3 3 0 0 1-6 0z'/%3E%3C/svg%3E") center/contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath fill='white' fill-rule='evenodd' d='M50 10C73 10 90 18 90 37C90 60 68 84 56 93.5C52.5 96.3 47.5 96.3 44 93.5C32 84 10 60 10 37C10 18 27 10 50 10ZM25 41a3 3 0 0 1 6 0v10a3 3 0 0 1-6 0zM36 35a3 3 0 0 1 6 0v22a3 3 0 0 1-6 0zM47 30a3 3 0 0 1 6 0v32a3 3 0 0 1-6 0zM58 35a3 3 0 0 1 6 0v22a3 3 0 0 1-6 0zM69 41a3 3 0 0 1 6 0v10a3 3 0 0 1-6 0z'/%3E%3C/svg%3E") center/contain no-repeat;
 }
 
 .icon-btn {
@@ -1604,21 +1605,155 @@ body.sync-guest #btn-tap-tempo {
 }
 .spotify-progress[hidden] { display: none; }
 
-/* ===== Tela de carregamento ===== */
-.loading-main {
-  flex: 1;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: var(--space-4); min-height: 100vh; min-height: 100dvh;
+/* ===== Tela de carregamento (splash animada) ===== */
+/* Marca: palheta com equalizador vazado. Linha do tempo (rápida o bastante
+   para login instantâneo — tudo pronto em ~0,9 s):
+     0,00 s  palheta aparece (escala) e o contorno se desenha
+     0,25 s  preenche com o degradê
+     0,42 s  barras do equalizador sobem (escalonadas)
+     0,30 s  nome + slogan sobem suavemente
+     ~1,0 s  loop calmo: barras "respiram", ondas saem da palheta, halo pulsa
+     1,2 s   só se demorar: barra de progresso + "Carregando suas setlists"
+   Saída (.leaving): fade da tela + leve zoom do conteúdo (só opacity/transform). */
+#screen-loading.splash {
+  position: fixed; inset: 0; z-index: 3000;
+  align-items: center; justify-content: center;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+           env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  overflow: hidden;
+  background:
+    radial-gradient(90% 55% at 50% 42%, color-mix(in srgb, var(--accent) 9%, var(--bg)) 0%, var(--bg) 70%),
+    var(--bg);
+  transition: opacity 0.42s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.loading-main .logo { font-size: 2rem; }
-.loading-spinner {
-  width: 36px; height: 36px; border-radius: 50%;
-  border: 3px solid var(--border); border-top-color: var(--accent);
-  animation: loading-spin 0.8s linear infinite;
+#screen-loading.splash.leaving { opacity: 0; pointer-events: none; }
+
+.splash-center {
+  display: flex; flex-direction: column; align-items: center;
+  margin-top: -6vh;
+  transition: transform 0.42s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.loading-text { color: var(--fg-muted); font-size: var(--fs-sm); margin: 0; }
-@keyframes loading-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .loading-spinner { animation-duration: 2s; } }
+#screen-loading.leaving .splash-center { transform: scale(1.06); }
+
+.splash-emblem {
+  position: relative; width: 104px; height: 104px; margin-bottom: 26px;
+  opacity: 0; transform: scale(0.82);
+  animation: splash-emblem-in 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.splash-halo {
+  position: absolute; left: 50%; top: 48%; width: 300px; height: 300px;
+  margin: -150px 0 0 -150px; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 26%, transparent) 0%,
+              color-mix(in srgb, var(--accent) 8%, transparent) 38%, transparent 68%);
+  opacity: 0;
+  animation: splash-fade-in 0.8s 0.2s ease-out forwards,
+             splash-halo 4s 1s ease-in-out infinite;
+}
+.splash-mark { position: relative; display: block; width: 100%; height: 100%; overflow: visible; }
+
+.splash-pick {
+  fill: url(#splash-grad); opacity: 0;
+  animation: splash-fade-in 0.45s 0.22s ease-out forwards;
+}
+.splash-outline {
+  fill: none; stroke: url(#splash-grad); stroke-width: 2.5;
+  stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 100; stroke-dashoffset: 100;
+  animation: splash-draw 0.6s cubic-bezier(0.3, 0, 0.2, 1) forwards;
+}
+.splash-ripple {
+  fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke;
+  transform-box: fill-box; transform-origin: 50% 45%;
+  opacity: 0;
+  animation: splash-ripple 2.8s calc(0.8s + var(--r, 0) * 1.4s) cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+
+.splash-bars rect {
+  fill: var(--bg);
+  transform-box: fill-box; transform-origin: center;
+  transform: scaleY(0);
+  animation:
+    splash-bar-in 0.5s calc(0.42s + var(--b) * 0.05s) cubic-bezier(0.34, 1.56, 0.64, 1) forwards,
+    splash-bar var(--d, 1.1s) 1.15s ease-in-out infinite alternate;
+}
+.splash-bars rect:nth-child(1) { --d: 1.3s;  --lo: 0.6; }
+.splash-bars rect:nth-child(2) { --d: 0.9s;  --lo: 0.5; }
+.splash-bars rect:nth-child(3) { --d: 1.15s; --lo: 0.62; }
+.splash-bars rect:nth-child(4) { --d: 0.95s; --lo: 0.5; }
+.splash-bars rect:nth-child(5) { --d: 1.25s; --lo: 0.6; }
+
+.splash-word {
+  font-size: 2.25rem; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1;
+  color: var(--fg);
+  opacity: 0; transform: translateY(10px);
+  animation: splash-rise 0.6s 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.splash-tag {
+  margin: 6px 0 0; font-size: var(--fs-sm); letter-spacing: 0.02em; color: var(--fg-muted);
+  opacity: 0; transform: translateY(8px);
+  animation: splash-rise 0.6s 0.42s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.splash-status {
+  position: absolute; left: 0; right: 0;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 44px);
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 0 16px; text-align: center;
+  opacity: 0; animation: splash-fade-in 0.5s 1.2s ease forwards;
+}
+.splash-progress {
+  position: relative; display: block; width: 112px; height: 2px; overflow: hidden;
+  border-radius: 2px; background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+.splash-progress span {
+  position: absolute; inset: 0; width: 40%; border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--accent), #00a8cc);
+  transform: translateX(-100%);
+  animation: splash-progress 1.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+.splash-text {
+  margin: 0; font-size: var(--fs-xs); letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+@keyframes splash-emblem-in { to { opacity: 1; transform: scale(1); } }
+@keyframes splash-fade-in { to { opacity: 1; } }
+@keyframes splash-draw { to { stroke-dashoffset: 0; } }
+@keyframes splash-rise { to { opacity: 1; transform: translateY(0); } }
+@keyframes splash-bar-in { to { transform: scaleY(1); } }
+@keyframes splash-bar { from { transform: scaleY(1); } to { transform: scaleY(var(--lo, 0.5)); } }
+@keyframes splash-ripple {
+  0% { opacity: 0; transform: scale(1); }
+  12% { opacity: 0.45; }
+  100% { opacity: 0; transform: scale(1.8); }
+}
+@keyframes splash-halo {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.94); }
+}
+@keyframes splash-progress { to { transform: translateX(250%); } }
+
+/* Telas baixas (celular deitado): compacta para o status não encostar no logo */
+@media (max-height: 480px) {
+  .splash-center { margin-top: -24px; }
+  .splash-emblem { width: 76px; height: 76px; margin-bottom: 16px; }
+  .splash-word { font-size: 1.75rem; }
+  .splash-status { bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
+}
+
+/* Movimento reduzido: sem zoom, ondas nem loops — só aparece com fade
+   (a regra global já zera as durações) e a marca fica estática e completa. */
+@media (prefers-reduced-motion: reduce) {
+  .splash-emblem, .splash-word, .splash-tag { transform: none; }
+  .splash-emblem, .splash-pick, .splash-halo, .splash-word, .splash-tag, .splash-status {
+    animation: splash-fade-in 0.3s ease forwards;
+  }
+  .splash-outline { animation: none; stroke-dashoffset: 0; }
+  .splash-ripple { display: none; }
+  .splash-bars rect { animation: none; transform: none; }
+  .splash-progress span { animation: none; transform: translateX(75%); }
+  #screen-loading.leaving .splash-center { transform: none; }
+}
 
 /* ===== Janela de confirmação do app (substitui confirm() nativo) ===== */
 .app-dialog { z-index: 4000; padding: var(--space-4); animation: app-dialog-fade 0.18s ease; }
