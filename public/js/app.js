@@ -561,10 +561,15 @@ async function handleLogout() {
   // Setlists que não conseguiram subir para a nuvem seriam perdidas
   let pending = [];
   try { pending = JSON.parse(localStorage.getItem('singfy_cloud_pending_v1')) || []; } catch (_) {}
-  const msg = pending.length
-    ? `Sair da conta?\n\nAtenção: ${pending.length} setlist(s) não conseguiram ser salvas na nuvem e serão apagadas deste aparelho.`
-    : 'Sair da conta?';
-  if (!confirm(msg)) return;
+  const ok = await appConfirm({
+    title: 'Sair da conta?',
+    message: pending.length
+      ? `Atenção: ${pending.length} setlist(s) não conseguiram ser salvas na nuvem e serão apagadas deste aparelho.`
+      : 'Suas setlists continuam salvas na nuvem e voltam quando você entrar de novo.',
+    confirmText: 'Sair',
+    danger: pending.length > 0
+  });
+  if (!ok) return;
   try {
     if (state.sync) setSync(null);
     await signOutUser();
@@ -1044,9 +1049,9 @@ function handleSetlistAction(id, action) {
   renderSetlist();
 }
 
-function handleClearSetlist() {
+async function handleClearSetlist() {
   if (setlist.getAll().length === 0) return;
-  if (confirm('Limpar todas as músicas desta setlist?')) {
+  if (await appConfirm({ title: 'Limpar a setlist?', message: 'Todas as músicas desta setlist serão removidas.', confirmText: 'Limpar', danger: true })) {
     setlist.clear();
     updateSetlistBadge();
     renderSetlist();
@@ -1111,12 +1116,15 @@ function handleMySetlistsClick(e) {
     e.stopPropagation();
     const card = deleteBtn.closest('.setlist-card');
     const id = card.dataset.id;
-    if (confirm('Excluir esta setlist? Esta ação não pode ser desfeita.')) {
-      setlist.deletePlaylist(id);
-      renderMySetlists();
-      updateSetlistBadge();
-      showToast('Setlist excluída', 'info');
-    }
+    const name = card.querySelector('.setlist-card-name')?.textContent || 'esta setlist';
+    appConfirm({ title: 'Excluir setlist?', message: `"${name}" será excluída. Esta ação não pode ser desfeita.`, confirmText: 'Excluir', danger: true })
+      .then(ok => {
+        if (!ok) return;
+        setlist.deletePlaylist(id);
+        renderMySetlists();
+        updateSetlistBadge();
+        showToast('Setlist excluída', 'info');
+      });
     return;
   }
 
@@ -1269,7 +1277,7 @@ function showShareModal(link) {
   modal.querySelector('#modal-close').addEventListener('click', () => modal.remove());
   const endBtn = modal.querySelector('#modal-end');
   if (endBtn) endBtn.addEventListener('click', async () => {
-    if (!confirm('Encerrar a sessão? A banda deixa de acompanhar você.')) return;
+    if (!await appConfirm({ title: 'Encerrar a sessão?', message: 'A banda deixa de acompanhar você.', confirmText: 'Encerrar', danger: true })) return;
     modal.remove();
     await endSyncSession();
   });
@@ -2361,7 +2369,7 @@ function updateSyncBadge() {
     : (sync.following ? 'SYNC · seguindo o host' : 'SYNC pausado');
 }
 
-function handleSyncBadgeClick() {
+async function handleSyncBadgeClick() {
   const sync = state.sync;
   if (!sync) return;
   if (sync.role === 'host') {
@@ -2369,23 +2377,88 @@ function handleSyncBadgeClick() {
     return;
   }
   if (sync.following) {
-    const choice = confirm('Parar de acompanhar o host?\n\nOK = controlar sozinho (continua na sessão)\nCancelar = continuar acompanhando');
+    const choice = await appDialog({
+      title: 'Parar de acompanhar o host?',
+      message: 'Você continua na sessão, mas controla a rolagem sozinho.',
+      buttons: [
+        { label: 'Continuar acompanhando', value: false },
+        { label: 'Controlar sozinho', value: true, primary: true }
+      ]
+    });
     if (!choice) return;
     sync.following = false;
     saveSync();
     showToast('Você está controlando sozinho. Toque em "SYNC" para voltar a acompanhar.', 'info');
   } else {
-    const choice = confirm('Voltar a acompanhar o host?\n\nOK = acompanhar\nCancelar = sair da sessão');
-    if (choice) {
+    const choice = await appDialog({
+      title: 'Modo sync pausado',
+      message: 'Voltar a acompanhar o host ou sair da sessão?',
+      buttons: [
+        { label: 'Sair da sessão', value: 'leave', danger: true },
+        { label: 'Cancelar', value: null },
+        { label: 'Acompanhar', value: 'follow', primary: true }
+      ]
+    });
+    if (choice === 'follow') {
       sync.following = true;
       sync.lastSeq = 0;
       saveSync();
       applyRemotePlayback(state.lastRemotePlayback); // alcança o host agora
       showToast('Acompanhando o host', 'success');
-    } else {
+    } else if (choice === 'leave') {
       endSyncSession();
     }
   }
+}
+
+// ===== Janela de confirmação do app =====
+// Substitui o confirm() nativo: além de feio, em alguns casos no Chrome do
+// Android (navegador interno do WhatsApp/Instagram, diálogos bloqueados) ele
+// não aparece e responde "não" na hora — o botão Sair "não fazia nada".
+function appDialog({ title, message = '', buttons }) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay app-dialog';
+    overlay.innerHTML = `
+      <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="app-dialog-title" aria-describedby="app-dialog-msg">
+        <h3 id="app-dialog-title">${escapeHtml(title)}</h3>
+        ${message ? `<p id="app-dialog-msg">${escapeHtml(message)}</p>` : ''}
+        <div class="modal-actions app-dialog-actions">
+          ${buttons.map((b, i) => `<button type="button" data-i="${i}" class="btn ${b.primary ? (b.danger ? 'btn-danger' : 'btn-primary') : (b.danger ? 'btn-ghost btn-ghost-danger' : 'btn-ghost')}">${escapeHtml(b.label)}</button>`).join('')}
+        </div>
+      </div>`;
+    const cancelValue = buttons.find(b => !b.primary && !b.danger)?.value ?? null;
+    const previousFocus = document.activeElement;
+    const close = (value) => {
+      document.removeEventListener('keydown', onKey, true);
+      overlay.remove();
+      if (previousFocus && previousFocus.focus) previousFocus.focus();
+      resolve(value);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(cancelValue); }
+    };
+    overlay.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-i]');
+      if (btn) close(buttons[Number(btn.dataset.i)].value);
+      else if (e.target === overlay) close(cancelValue);
+    });
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(overlay);
+    const primary = overlay.querySelector('.btn-primary, .btn-danger') || overlay.querySelector('button');
+    if (primary) primary.focus();
+  });
+}
+
+function appConfirm({ title, message, confirmText = 'Confirmar', cancelText = 'Cancelar', danger = false }) {
+  return appDialog({
+    title,
+    message,
+    buttons: [
+      { label: cancelText, value: false },
+      { label: confirmText, value: true, primary: true, danger }
+    ]
+  });
 }
 
 function escapeHtml(str) {
