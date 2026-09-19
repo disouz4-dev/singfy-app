@@ -203,8 +203,15 @@ async function loadUserSetlist(uid) {
       (Array.isArray(stored.songs) && stored.songs.length > 0)
     );
 
-    if (hasCloudData) {
-      // A nuvem tem setlists -> usa a nuvem (autoridade)
+    const cloudUpdatedAt = Date.parse(userDoc.data()?.updatedAt || '') || 0;
+    const localUpdatedAt = setlist.getLocalUpdatedAt();
+    if (hasCloudData && localUpdatedAt > cloudUpdatedAt && setlist.getAllPlaylists().length > 0) {
+      // O aparelho tem alterações mais novas que a nuvem (ex.: o salvamento
+      // na nuvem falhou ou não terminou antes de recarregar). Antes a nuvem
+      // sempre vencia e músicas excluídas voltavam. Reenvia o aparelho.
+      await saveSetlistToCloud(JSON.stringify({ playlists: setlist.playlists, activePlaylistId: setlist.activePlaylistId }));
+    } else if (hasCloudData) {
+      // A nuvem tem setlists mais novas -> usa a nuvem
       setlist.import(JSON.stringify(stored));
     } else {
       // Nuvem vazia. Se o dispositivo tem setlists locais, envia para a nuvem
@@ -227,8 +234,24 @@ async function loadUserSetlist(uid) {
   }
 }
 
+// Limite de 1 MiB por documento do Firestore (com folga para os metadados)
+const CLOUD_DOC_LIMIT = 1000 * 1024;
+let lastCloudErrorAt = 0;
+
+function notifyCloudSaveFailed(reason) {
+  // Evento para a UI avisar (no máximo a cada 30 s)
+  if (Date.now() - lastCloudErrorAt < 30000) return;
+  lastCloudErrorAt = Date.now();
+  window.dispatchEvent(new CustomEvent('singfy:cloud-save-failed', { detail: { reason } }));
+}
+
 export async function saveSetlistToCloud(setlistData) {
   if (!auth || !currentUser || !db) return false;
+  if (new Blob([setlistData]).size > CLOUD_DOC_LIMIT) {
+    console.error('Setlists grandes demais para a nuvem:', setlistData.length);
+    notifyCloudSaveFailed('too-large');
+    return false;
+  }
   try {
     await setDoc(doc(db, 'users', currentUser.uid), {
       setlist: JSON.parse(setlistData),
@@ -237,6 +260,7 @@ export async function saveSetlistToCloud(setlistData) {
     return true;
   } catch (err) {
     console.error('Erro ao salvar setlist na nuvem:', err);
+    notifyCloudSaveFailed(err && err.code);
     return false;
   }
 }

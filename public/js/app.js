@@ -303,6 +303,14 @@ function bindEvents() {
   if (els.micToggle) els.micToggle.addEventListener('click', toggleMic);
   if (els.showScrollContainer) els.showScrollContainer.addEventListener('scroll', handleScroll);
   
+  // Salvamento na nuvem falhou (antes só aparecia no console)
+  window.addEventListener('singfy:cloud-save-failed', (e) => {
+    const reason = e.detail && e.detail.reason;
+    showToast(reason === 'too-large'
+      ? 'Suas setlists ficaram grandes demais para salvar na nuvem. Estão salvas só neste aparelho.'
+      : 'Não foi possível salvar na nuvem. Suas alterações estão salvas neste aparelho.', 'warning');
+  });
+
   // Teclado
   document.addEventListener('keydown', handleKeydown);
   

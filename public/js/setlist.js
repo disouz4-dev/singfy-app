@@ -34,8 +34,23 @@ export class SetlistManager {
     let changed = false;
     const normChord = (n) => String(n || "").trim()
       .replace(/♯/g, "#").replace(/♭/g, "b").replace(/\s+/g, "");
+    // Linhas com HTML (página de erro salva como letra) ou gigantes
+    const isJunkLine = (l) => {
+      const t = String((l && (l.text ?? l.letra)) || "");
+      return t.length > 2000 || /<(html|head|script|meta)[\s>]/i.test(t);
+    };
     for (const pl of this.playlists) {
       if (!pl || !Array.isArray(pl.songs)) { pl.songs = []; changed = true; continue; }
+      for (const s of pl.songs) {
+        if (!s || !Array.isArray(s.lines)) continue;
+        const n = s.lines.length;
+        s.lines = s.lines.filter(l => !isJunkLine(l));
+        if (s.lines.length !== n) changed = true;
+        // "raw" duplicava cada linha e nunca era lido
+        for (const l of s.lines) {
+          if (l && l.raw !== undefined) { delete l.raw; changed = true; }
+        }
+      }
       const before = pl.songs.length;
       pl.songs = pl.songs.filter(s => s && s.metadata && typeof s.metadata === 'object' && Array.isArray(s.lines) && s.lines.length > 0);
       if (pl.songs.length !== before) {
@@ -52,17 +67,16 @@ export class SetlistManager {
             if (l.entries || l.letra) {
               return {
                 chords: (l.entries || []).map(e => ({ name: normChord(e.name), display: e.text, originalName: e.name, pos: e.pos })),
-                text: String(l.letra || "").replace(/&nbsp;/g, " "),
-                raw: l
+                text: String(l.letra || "").replace(/&nbsp;/g, " ")
               };
             }
-            return { chords: [], text: String(l.letra || l.text || ""), raw: l };
+            return { chords: [], text: String(l.letra || l.text || "") };
           });
           changed = true;
         }
       }
     }
-    if (changed) this.save();
+    if (changed) this.save(false);
   }
 
   _migrateLegacy() {
@@ -90,12 +104,25 @@ export class SetlistManager {
     } catch (_) {}
   }
 
-  save() {
+  // Quando o aparelho alterou as setlists pela última vez (para comparar
+  // com a nuvem ao carregar)
+  getLocalUpdatedAt() {
+    try {
+      const data = JSON.parse(localStorage.getItem(STORAGE_KEY));
+      return (data && data.updatedAt) || 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  // touch=false: limpeza automática — não conta como alteração do usuário
+  // (senão um aparelho com dados velhos pareceria "mais novo" que a nuvem)
+  save(touch = true) {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         playlists: this.playlists,
         activePlaylistId: this.activePlaylistId,
-        updatedAt: Date.now()
+        updatedAt: touch ? Date.now() : this.getLocalUpdatedAt()
       }));
     } catch (e) {
       console.error("Erro ao salvar setlists:", e);
@@ -445,7 +472,7 @@ export class SetlistManager {
         this.activePlaylistId = data.activePlaylistId ||
           (this.playlists.length > 0 ? this.playlists[0].id : null);
         this._sanitize();
-        this.save();
+        this.save(false); // cópia da nuvem, não é alteração do aparelho
         return true;
       }
     } catch (e) {
