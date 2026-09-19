@@ -1581,3 +1581,25 @@ body.sync-guest #btn-tap-tempo {
   opacity: 0.35;
 }
 .modal-sync-info { font-size: 0.9rem; opacity: 0.85; margin: 12px 0; }
+
+/* ===== Botões de compartilhar nas telas de setlist ===== */
+.setlist-card-share:hover { background: var(--accent-bg); color: var(--accent); }
+.setlist-meta-info { flex: 1; }
+.setlist-meta-share {
+  flex-shrink: 0;
+  color: var(--accent);
+  border-color: var(--accent);
+  padding: var(--space-2) var(--space-3);
+}
+@media (max-width: 480px) {
+  /* Os botões ocupam a barra e cobriam o título; o nome da setlist já
+     aparece no card logo abaixo */
+  #screen-setlist .topbar .logo { display: none; }
+  /* Título deixa de ser centralizado por cima dos botões: ocupa o espaço livre */
+  #screen-my-setlists .topbar .logo {
+    position: static; transform: none;
+    flex: 1; min-width: 0; font-size: var(--fs-lg);
+    overflow: hidden; text-overflow: ellipsis;
+  }
+}
+.spotify-progress[hidden] { display: none; }

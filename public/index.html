@@ -103,7 +103,7 @@
               <circle cx="18" cy="5" r="3"/>
               <circle cx="6" cy="12" r="3"/>
               <circle cx="18" cy="19" r="3"/>
-              <path d="M8.59 13.51l1.06 1.06M15.49 13.51l-1.06 1.06M12 8.59l1.06 1.06M12 15.49l-1.06 1.06"/>
+              <path d="M8.59 13.51l6.83 3.98M15.41 6.51l-6.82 3.98"/>
             </svg>
             <span>Compartilhar</span>
           </button>
@@ -131,7 +131,7 @@
             <span class="spinner hidden" aria-hidden="true"></span>
           </button>
         </form>
-        <div id="spotify-progress" class="spotify-progress hidden" aria-live="polite"></div>
+        <div id="spotify-progress" class="spotify-progress" hidden aria-live="polite"></div>
       </main>
       
       <footer class="bottombar">
@@ -213,7 +213,7 @@
               <circle cx="18" cy="5" r="3"/>
               <circle cx="6" cy="12" r="3"/>
               <circle cx="18" cy="19" r="3"/>
-              <path d="M8.59 13.51l1.06 1.06M15.49 13.51l-1.06 1.06M12 8.59l1.06 1.06M12 15.49l-1.06 1.06"/>
+              <path d="M8.59 13.51l6.83 3.98M15.41 6.51l-6.82 3.98"/>
             </svg>
             <span>Compartilhar</span>
           </button>
@@ -238,6 +238,13 @@
               <span id="setlist-meta-date" class="setlist-meta-date"></span>
             </div>
           </div>
+          <button id="btn-share-meta" class="btn btn-ghost setlist-meta-share" aria-label="Compartilhar setlist com a banda" title="Compartilhar com a banda (modo sync)">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+              <path d="M8.59 13.51l6.83 3.98M15.41 6.51l-6.82 3.98"/>
+            </svg>
+            <span>Compartilhar</span>
+          </button>
         </div>
         <ul id="setlist-list" class="setlist-list" role="list" aria-label="Músicas do show">
           <!-- Itens inseridos via JS -->

@@ -265,6 +265,8 @@ function bindEvents() {
   if (els.btnNewSetlist) els.btnNewSetlist.addEventListener('click', () => openSetlistModal());
   if (els.btnEditSetlist) els.btnEditSetlist.addEventListener('click', () => openSetlistModal(setlist.getActive()));
   if (els.btnShareSession) els.btnShareSession.addEventListener('click', handleShareSession);
+  const btnShareMeta = document.getElementById('btn-share-meta');
+  if (btnShareMeta) btnShareMeta.addEventListener('click', handleShareSession);
   if (els.btnStartShow) els.btnStartShow.addEventListener('click', handleStartShow);
   if (els.btnAddMusicEmpty) els.btnAddMusicEmpty.addEventListener('click', () => { showGcseSearch(); showScreen('search'); });
   if (els.btnAddMusic) els.btnAddMusic.addEventListener('click', () => { showGcseSearch(); showScreen('search'); });
@@ -838,12 +840,14 @@ function showGcseSearch() {
 }
 
 // Tenta limpar os resultados do gcse-search (best-effort)
+// getElement() recebe o NOME do buscador ("standard0"), não um índice — com
+// getElement(0) nada era limpo e a última busca reaparecia.
 function clearGcseResults() {
   try {
     if (window.google && google.search && google.search.cse) {
-      const el = google.search.cse.element.getElement(0);
-      if (el) {
-        el.execute('');
+      const all = google.search.cse.element.getAllElements() || {};
+      for (const el of Object.values(all)) {
+        if (typeof el.prefillQuery === 'function') el.prefillQuery('');
         if (typeof el.clearAllResults === 'function') el.clearAllResults();
       }
     }
@@ -1037,6 +1041,9 @@ function renderMySetlists() {
       <div class="setlist-card-head">
         <h3 class="setlist-card-name">${escapeHtml(p.name)}</h3>
         <div class="setlist-card-actions">
+          <button class="iconbtn setlist-card-share" data-action="share" title="Compartilhar com a banda" aria-label="Compartilhar setlist">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.59 13.51l6.83 3.98M15.41 6.51l-6.82 3.98"/></svg>
+          </button>
           <button class="iconbtn setlist-card-delete" data-action="delete" title="Excluir setlist" aria-label="Excluir setlist">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
@@ -1052,6 +1059,16 @@ function renderMySetlists() {
 }
 
 function handleMySetlistsClick(e) {
+  const shareBtn = e.target.closest('[data-action="share"]');
+  if (shareBtn) {
+    e.stopPropagation();
+    const id = shareBtn.closest('.setlist-card').dataset.id;
+    // Compartilha a setlist do card (o compartilhamento usa a setlist ativa)
+    setlist.setActive(id);
+    updateSetlistBadge();
+    handleShareSession();
+    return;
+  }
   const deleteBtn = e.target.closest('[data-action="delete"]');
   if (deleteBtn) {
     e.stopPropagation();
