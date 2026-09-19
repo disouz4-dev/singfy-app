@@ -307,6 +307,14 @@ function bindEvents() {
   if (els.micToggle) els.micToggle.addEventListener('click', toggleMic);
   if (els.showScrollContainer) els.showScrollContainer.addEventListener('scroll', handleScroll);
   
+  // Host não conseguiu transmitir para a banda
+  let lastSyncWarnAt = 0;
+  window.addEventListener('singfy:sync-failed', () => {
+    if (Date.now() - lastSyncWarnAt < 30000) return;
+    lastSyncWarnAt = Date.now();
+    showToast('Não foi possível sincronizar com a banda. Verifique a internet.', 'warning');
+  });
+
   // Salvamento na nuvem falhou (antes só aparecia no console)
   window.addEventListener('singfy:cloud-save-failed', (e) => {
     const reason = e.detail && e.detail.reason;
@@ -1208,7 +1216,36 @@ function handleSetlistModalSubmit(e) {
   closeSetlistModal();
 }
 
+// Criar a sessão leva ~1 s; sem reação na tela o usuário tocava de novo e
+// cada toque criava outra sessão e abria outra janela por cima.
+let shareInFlight = false;
+
+function setShareButtonsBusy(busy) {
+  document.querySelectorAll('#btn-share-home, #btn-share-session, #btn-share-meta, .setlist-card-share').forEach(btn => {
+    btn.disabled = busy;
+    btn.setAttribute('aria-busy', String(busy));
+    btn.classList.toggle('is-busy', busy);
+    const label = btn.querySelector('span');
+    if (label) {
+      if (busy) { btn.dataset.label = label.textContent; label.textContent = 'Criando link...'; }
+      else if (btn.dataset.label) { label.textContent = btn.dataset.label; delete btn.dataset.label; }
+    }
+  });
+}
+
 async function handleShareSession() {
+  if (shareInFlight) return;
+  shareInFlight = true;
+  setShareButtonsBusy(true);
+  try {
+    await shareSessionFlow();
+  } finally {
+    shareInFlight = false;
+    setShareButtonsBusy(false);
+  }
+}
+
+async function shareSessionFlow() {
   const { createSession, getInviteLink } = await import('./session.js');
   const { getCurrentUser: getAuthUser } = await import('./auth.js?v=20260905');
   
@@ -1235,6 +1272,7 @@ async function handleShareSession() {
     return;
   }
   try {
+    showToast('Criando link de compartilhamento...', 'info');
     const sessionId = await createSession(user.uid, setlistData);
     const link = getInviteLink(sessionId);
     setSync({
@@ -1262,8 +1300,10 @@ async function handleShareSession() {
 }
 
 function showShareModal(link) {
+  // Nunca empilha janelas de compartilhar
+  document.querySelectorAll('.share-modal').forEach(m => m.remove());
   const modal = document.createElement('div');
-  modal.className = 'modal-overlay';
+  modal.className = 'modal-overlay share-modal';
   modal.innerHTML = `
     <div class="modal" role="dialog" aria-labelledby="modal-title" aria-modal="true">
       <h3 id="modal-title">Compartilhar Setlist</h3>
@@ -1272,7 +1312,7 @@ function showShareModal(link) {
         <input type="text" value="${link}" readonly id="modal-link-input">
         <button class="btn btn-ghost" id="modal-copy">Copiar</button>
       </div>
-      <p class="modal-sync-info">Modo sync: você é o <strong>host</strong>. Play, pause, troca de música e velocidade são repetidos nos aparelhos da banda. Cada um escolhe se vê a cifra ou só a letra.${state.sync ? ` <br>Na sessão: <strong>${state.sync.participants || 1}</strong> aparelho(s).` : ''}</p>
+      <p class="modal-sync-info">Modo sync: você é o <strong>host</strong>. Play, pause, troca de música e velocidade são repetidos nos aparelhos da banda. Cada um escolhe se vê a cifra ou só a letra.${state.sync ? ` <br>Na sessão agora: <strong class="share-participants">${state.sync.participants || 1}</strong> aparelho(s) (inclui o seu).` : ''}</p>
       <div class="modal-actions">
         ${state.sync && state.sync.role === 'host' ? '<button class="btn btn-ghost danger" id="modal-end">Encerrar sessão</button>' : ''}
         <button class="btn btn-primary" id="modal-close">Fechar</button>
@@ -2270,6 +2310,8 @@ function handleSessionUpdate(data) {
   }
   sync.participants = (data.participants || []).length;
   updateSyncBadge();
+  // Contagem ao vivo na janela de compartilhar (o host vê quem entrou)
+  document.querySelectorAll('.share-participants').forEach(el => { el.textContent = String(sync.participants || 1); });
   if (sync.role !== 'guest') return;
   state.lastRemotePlayback = data.playback || null; // para retomar ao voltar a acompanhar
 
