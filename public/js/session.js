@@ -107,7 +107,7 @@ export async function joinSession(sessionId, userId) {
   
   watchSession(sessionId);
   
-  return { sessionId, isHost, setlist: data.setlist };
+  return { sessionId, isHost, setlist: data.setlist, playback: data.playback || null };
 }
 
 // Sai da sessão
@@ -160,9 +160,27 @@ export async function updateSessionSetlist(setlistData) {
   }
 }
 
+// Modo sync: o host publica o estado de reprodução (música atual, play/pause,
+// posição, velocidade) e os integrantes acompanham. Só o host escreve.
+export async function updateSessionPlayback(playback) {
+  if (!currentSessionId || !db || !isHost) return false;
+  try {
+    await updateDoc(doc(db, 'sessions', currentSessionId), {
+      playback,
+      updatedAt: serverTimestamp()
+    });
+    return true;
+  } catch (err) {
+    console.warn('Erro ao sincronizar reprodução:', err);
+    return false;
+  }
+}
+
 // Escuta mudanças em tempo real
 function watchSession(sessionId) {
   if (!db) return;
+  // Evita listeners duplicados ao reentrar/retomar uma sessão
+  if (currentSessionUnsubscribe) currentSessionUnsubscribe();
   
   const sessionRef = doc(db, 'sessions', sessionId);
   
@@ -178,7 +196,8 @@ function watchSession(sessionId) {
       setlist: data.setlist,
       participants: data.participants,
       hostId: data.hostId,
-      isActive: data.isActive
+      isActive: data.isActive,
+      playback: data.playback || null
     });
   }, (err) => {
     console.error('Erro na sessão:', err);

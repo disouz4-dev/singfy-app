@@ -121,6 +121,9 @@ export class AutoRollPlayer {
     const elapsed = (Date.now() - this.startTime) * this.speed;
     const progress = Math.min(1, elapsed / (this.duration * 1000));
     
+    // A altura rolável muda durante a música (barras se escondendo, modo só
+    // letra, fonte carregando); com a altura antiga a rolagem adiantava.
+    this.updateMaxScroll();
     this.scrollTop = progress * this.maxScroll;
     if (this.container) this.container.scrollTop = this.scrollTop;
     this.onPositionChange(progress);
@@ -132,6 +135,17 @@ export class AutoRollPlayer {
     }
     
     this.animationFrame = requestAnimationFrame(() => this.animate());
+  }
+
+  // Posição atual (0-1). Tocando, vem do relógio do player (não da rolagem da
+  // tela, que congela com o app em segundo plano) — usada no modo sync.
+  getProgress() {
+    if (this.isPlaying && this.startTime) {
+      return Math.max(0, Math.min(1, (Date.now() - this.startTime) * this.speed / (this.duration * 1000)));
+    }
+    this.updateMaxScroll();
+    const top = this.container ? this.container.scrollTop : this.scrollTop;
+    return this.maxScroll > 0 ? Math.min(1, top / this.maxScroll) : 0;
   }
 
   // Pula para posição (0-1)
