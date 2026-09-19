@@ -31,7 +31,7 @@ function parseLine(raw) {
   // Limpa entidades
   text = decodeHtmlEntities(text);
   
-  return { chords, text, raw };
+  return { chords, text };
 }
 
 // Normaliza um array de linhas de qualquer formato ({entries,letra} ou {chords,text})
@@ -41,7 +41,7 @@ export function normalizeLines(lines) {
   return lines.map(line => {
     if (line.chords && line.text !== undefined) return line;
     if (line.entries || line.letra) return parseLine(line);
-    return { chords: [], text: line.letra || line.text || "", raw: line };
+    return { chords: [], text: line.letra || line.text || "" };
   });
 }
 

@@ -274,7 +274,13 @@ export function parseCifraHtml(html, url) {
   const meta = extractMeta(html);
   const block = findCifraBlock(html);
 
-  // Se o HTML parseável não veio, tenta o modo markdown (fallback)
+  // Se o HTML parseável não veio, tenta o modo markdown (fallback) — mas só
+  // se não for uma página HTML (ex.: página de erro do Cifra Club). Antes a
+  // página inteira (~270 KB) virava uma "linha de letra" e estourava o
+  // limite de 1 MB do documento na nuvem.
+  if (!block && /<(html|head|body|script)[\s>]/i.test(html)) {
+    return { name: meta.name, artist: meta.artist, tom: meta.tom, url, lines: [] };
+  }
   if (!block) {
     const fallback = parseJinaText(html, url);
     fallback.name = meta.name;
