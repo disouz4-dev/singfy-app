@@ -1593,7 +1593,7 @@ function handleMidiToggle() {
       }
       if (result.transport === 'bluetooth') {
         showToast(`MIDI via Bluetooth (${result.device})`, 'success');
-        const dbg = document.getElementById('midi-debug');
+        const dbg = MIDI_DEBUG ? document.getElementById('midi-debug') : null;
         if (dbg) {
           dbg.hidden = false;
           dbg.textContent = 'MIDI conectado: ' + result.device + ' — verificando...';
@@ -1627,7 +1627,12 @@ function fmtHex(u8) {
 }
 
 // Mostra o último pacote Bluetooth recebido + decode na barra de diagnóstico
+// Diagnóstico MIDI na tela só com ?midi-debug no endereço (antes cada
+// pisada mostrava um aviso e uma barra com os bytes recebidos)
+const MIDI_DEBUG = new URLSearchParams(location.search).has('midi-debug');
+
 function handleMidiPacket(u8, messages, label) {
+  if (!MIDI_DEBUG) return;
   const dbg = document.getElementById('midi-debug');
   if (!dbg) return;
   const parts = [`${label || 'bt'} ${fmtHex(u8)}`];
@@ -1639,11 +1644,6 @@ function handleMidiPacket(u8, messages, label) {
   }
   dbg.textContent = 'MIDI ' + parts.join(' ');
   dbg.hidden = false;
-  if (messages && messages.length) {
-    showToast('MIDI: ' + (state.lastMidiCommand || 'recebido'), 'success');
-  } else {
-    showToast('MIDI: pacote sem comando (' + fmtHex(u8) + ')', 'warning');
-  }
 }
 
 function hideMidiDebug() {
