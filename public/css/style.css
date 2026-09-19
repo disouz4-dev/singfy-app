@@ -1603,3 +1603,19 @@ body.sync-guest #btn-tap-tempo {
   }
 }
 .spotify-progress[hidden] { display: none; }
+
+/* ===== Tela de carregamento ===== */
+.loading-main {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--space-4); min-height: 100vh; min-height: 100dvh;
+}
+.loading-main .logo { font-size: 2rem; }
+.loading-spinner {
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 3px solid var(--border); border-top-color: var(--accent);
+  animation: loading-spin 0.8s linear infinite;
+}
+.loading-text { color: var(--fg-muted); font-size: var(--fs-sm); margin: 0; }
+@keyframes loading-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loading-spinner { animation-duration: 2s; } }

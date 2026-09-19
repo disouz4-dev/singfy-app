@@ -76,11 +76,13 @@ async function init() {
     // confirmado — direto após redirect, sem depender só do listener de estado
     setPostLoginHandler(() => {
       console.log('[singfy] postLoginHandler: usuário presente, navegando p/ setlist');
-      if (state.currentScreen === 'login') showMySetlists();
+      if (isEntryScreen()) showMySetlists();
     });
     
     // Inicializa autenticação (não bloqueia UI)
     await initAuth();
+    // Sem usuário (ou Firebase indisponível): agora sim mostra o login
+    if (state.currentScreen === 'loading' && !getCurrentUser()) showScreen('login');
     
     // Modo sync: escuta a sessão, envia mudanças da setlist (host) e retoma
     // uma sessão ativa após recarregar a página
@@ -291,6 +293,8 @@ function bindEvents() {
   if (els.speedUp) els.speedUp.addEventListener('click', () => adjustSpeed(SPEED_STEP));
   if (els.btnTapTempo) els.btnTapTempo.addEventListener('click', handleTapTempo);
   if (els.btnMidi) els.btnMidi.addEventListener('click', handleMidiToggle);
+  const btnLogout = document.getElementById('btn-logout');
+  if (btnLogout) btnLogout.addEventListener('click', handleLogout);
   const syncBadge = document.getElementById('sync-badge');
   if (syncBadge) syncBadge.addEventListener('click', handleSyncBadgeClick);
   if (els.fontDown) els.fontDown.addEventListener('click', () => adjustFontSize(-1));
@@ -326,7 +330,7 @@ function bindEvents() {
 
 // ===== Navegação de Telas =====
 function showScreen(screenName) {
-  const screens = ['login', 'search', 'my-setlists', 'setlist', 'show'];
+  const screens = ['loading', 'login', 'search', 'my-setlists', 'setlist', 'show'];
   screens.forEach(s => {
     const el = document.getElementById(`screen-${s}`);
     if (el) el.classList.toggle('active', s === screenName);
@@ -359,8 +363,18 @@ function showScreen(screenName) {
 }
 
 function restoreScreen() {
-  // Inicia na tela de login
-  showScreen('login');
+  // Inicia no carregamento; o login só aparece se não houver usuário
+  showScreen('loading');
+  // Segurança: se a verificação travar (rede/Firebase), não fica preso aqui
+  setTimeout(() => {
+    if (state.currentScreen !== 'loading') return;
+    if (getCurrentUser()) showMySetlists();
+    else showScreen('login');
+  }, 8000);
+}
+
+function isEntryScreen() {
+  return state.currentScreen === 'login' || state.currentScreen === 'loading';
 }
 
 // ===== Handlers de Autenticação =====
@@ -544,11 +558,26 @@ function updateAuthInputsLabel() {
 }
 
 async function handleLogout() {
+  // Setlists que não conseguiram subir para a nuvem seriam perdidas
+  let pending = [];
+  try { pending = JSON.parse(localStorage.getItem('singfy_cloud_pending_v1')) || []; } catch (_) {}
+  const msg = pending.length
+    ? `Sair da conta?\n\nAtenção: ${pending.length} setlist(s) não conseguiram ser salvas na nuvem e serão apagadas deste aparelho.`
+    : 'Sair da conta?';
+  if (!confirm(msg)) return;
   try {
+    if (state.sync) setSync(null);
     await signOutUser();
-    showToast('Desconectado', 'info');
+    // Limpa as setlists deste aparelho (já estão na nuvem): sem isso, quem
+    // entrasse depois neste aparelho receberia as suas setlists na conta dele
+    setlist.clearLocalData();
+    try { localStorage.removeItem('singfy_cloud_pending_v1'); } catch (_) {}
+    updateSetlistBadge();
+    showScreen('login');
+    showToast('Você saiu da conta', 'info');
   } catch (err) {
     console.error('Erro no logout:', err);
+    showToast('Não foi possível sair. Tente de novo.', 'error');
   }
 }
 
@@ -594,7 +623,7 @@ function handleAuthChange(user) {
     els.loginButtons.hidden = true;
     els.btnShareHome.hidden = false;
     // Navega para a home do usuário (setlist pessoal) após login
-    if (state.currentScreen === 'login') {
+    if (isEntryScreen()) {
       showMySetlists();
     }
   } else {
