@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=20260919b">
+  <link rel="stylesheet" href="css/style.css?v=20260919c">
   <link rel="manifest" href="manifest.json">
   <script async src="https://cse.google.com/cse.js?cx=b630d192f3e994907"></script>
 </head>
@@ -33,11 +33,37 @@
     <!-- Tela de Login -->
     <!-- Carregamento: aparece enquanto o login é verificado (antes o login
          aparecia e sumia a cada recarga) -->
-    <section id="screen-loading" class="screen active" role="main" aria-label="Carregando" aria-busy="true">
-      <div class="loading-main">
-        <h1 class="logo">Singfy</h1>
-        <div class="loading-spinner" aria-hidden="true"></div>
-        <p class="loading-text">Carregando suas setlists...</p>
+    <section id="screen-loading" class="screen active splash" role="main" aria-label="Carregando" aria-busy="true">
+      <div class="splash-center" aria-hidden="true">
+        <div class="splash-emblem">
+          <span class="splash-halo"></span>
+          <!-- Palheta com equalizador vazado; viewBox centrado no centro de massa da palheta -->
+          <svg class="splash-mark" viewBox="0 0 100 100">
+            <defs>
+              <linearGradient id="splash-grad" x1="0.2" y1="0" x2="0.8" y2="1">
+                <stop offset="0" stop-color="var(--accent)"/>
+                <stop offset="1" stop-color="#00a8cc"/>
+              </linearGradient>
+            </defs>
+            <path class="splash-ripple" d="M50 10C73 10 90 18 90 37C90 60 68 84 56 93.5C52.5 96.3 47.5 96.3 44 93.5C32 84 10 60 10 37C10 18 27 10 50 10Z"/>
+            <path class="splash-ripple" style="--r:1" d="M50 10C73 10 90 18 90 37C90 60 68 84 56 93.5C52.5 96.3 47.5 96.3 44 93.5C32 84 10 60 10 37C10 18 27 10 50 10Z"/>
+            <path class="splash-pick" d="M50 10C73 10 90 18 90 37C90 60 68 84 56 93.5C52.5 96.3 47.5 96.3 44 93.5C32 84 10 60 10 37C10 18 27 10 50 10Z"/>
+            <g class="splash-bars">
+              <rect style="--b:0" x="25" y="38" width="6" height="16" rx="3"/>
+              <rect style="--b:1" x="36" y="32" width="6" height="28" rx="3"/>
+              <rect style="--b:2" x="47" y="27" width="6" height="38" rx="3"/>
+              <rect style="--b:3" x="58" y="32" width="6" height="28" rx="3"/>
+              <rect style="--b:4" x="69" y="38" width="6" height="16" rx="3"/>
+            </g>
+            <path class="splash-outline" pathLength="100" d="M50 10C73 10 90 18 90 37C90 60 68 84 56 93.5C52.5 96.3 47.5 96.3 44 93.5C32 84 10 60 10 37C10 18 27 10 50 10Z"/>
+          </svg>
+        </div>
+        <div class="splash-word">Singfy</div>
+        <p class="splash-tag">Setlist e cifra para shows</p>
+      </div>
+      <div class="splash-status">
+        <span class="splash-progress" aria-hidden="true"><span></span></span>
+        <p class="splash-text">Carregando suas setlists</p>
       </div>
     </section>
 
