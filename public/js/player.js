@@ -1,5 +1,15 @@
 // player.js — Auto-roll por tempo + detecção por microfone
 
+// Limites e passo da velocidade de rolagem (botões +/−, setas, pedal MIDI)
+export const SPEED_MIN = 0.25;
+export const SPEED_MAX = 5;
+export const SPEED_STEP = 0.25;
+
+export function clampSpeed(speed) {
+  // Arredonda a 2 casas para não acumular erro de ponto flutuante
+  return Math.round(Math.max(SPEED_MIN, Math.min(SPEED_MAX, speed)) * 100) / 100;
+}
+
 export class AutoRollPlayer {
   constructor(options = {}) {
     this.container = options.container; // elemento rolável
@@ -44,7 +54,7 @@ export class AutoRollPlayer {
 
   // Define velocidade (0.5 a 2.0)
   setSpeed(speed) {
-    const newSpeed = Math.max(0.25, Math.min(3, speed));
+    const newSpeed = clampSpeed(speed);
     // Rebase do startTime para a posição atual não pular ao mudar a velocidade
     if (this.isPlaying && this.startTime) {
       const elapsed = (Date.now() - this.startTime) * this.speed;

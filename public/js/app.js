@@ -4,7 +4,7 @@
 import { parseSongResponse, linesToHtml, linesToClassic, extractUniqueChords, normalizeLines, isSectionLike } from './parser.js?v=20260918';
 import { transposeChord, transposeSong, getHarmonicField, detectKey, formatChord, generateTransposeButtons } from './transpose.js';
 import { setlist, SetlistManager } from './setlist.js';
-import { AutoRollPlayer, estimateDuration, TapTempo } from './player.js?v=20260918';
+import { AutoRollPlayer, estimateDuration, TapTempo, SPEED_STEP, clampSpeed } from './player.js?v=20260919';
 import { fetchSong, toSlug, isValidSlug, isCifraLink, fetchSpotifyPlaylistTracks, extractSpotifyPlaylistId, spotifyTitleCandidates } from './api.js?v=20260918';
 import { initAuth, signInWithGoogle, signOutUser, onAuthChange, getCurrentUser, isAuthenticated, setPostLoginHandler, onSetlistReady, registerWithEmail, loginWithEmail, resetPassword, setDisplayName, createPasswordForAccount } from './auth.js?v=20260905';
 import { createSession, getInviteLink, checkUrlForSession, onSessionChange } from './session.js';
@@ -277,8 +277,8 @@ function bindEvents() {
   if (els.showPrev) els.showPrev.addEventListener('click', handlePrevSong);
   if (els.showNext) els.showNext.addEventListener('click', handleNextSong);
   if (els.showExit) els.showExit.addEventListener('click', () => showScreen('setlist'));
-  if (els.speedDown) els.speedDown.addEventListener('click', () => adjustSpeed(-0.1));
-  if (els.speedUp) els.speedUp.addEventListener('click', () => adjustSpeed(0.1));
+  if (els.speedDown) els.speedDown.addEventListener('click', () => adjustSpeed(-SPEED_STEP));
+  if (els.speedUp) els.speedUp.addEventListener('click', () => adjustSpeed(SPEED_STEP));
   if (els.btnTapTempo) els.btnTapTempo.addEventListener('click', handleTapTempo);
   if (els.btnMidi) els.btnMidi.addEventListener('click', handleMidiToggle);
   if (els.fontDown) els.fontDown.addEventListener('click', () => adjustFontSize(-1));
@@ -1413,7 +1413,7 @@ function initPlayer() {
   
   // Atualiza controles
   updatePlayPauseIcon(false);
-  els.speedValue.textContent = `${state.player.speed.toFixed(1)}x`;
+  els.speedValue.textContent = `${formatSpeed(state.player.speed)}`;
 }
 
 function estimateDurationFromSong(song) {
@@ -1452,14 +1452,19 @@ function rememberSpeed(speed) {
 function applyCurrentSpeed() {
   if (!state.player) return;
   state.player.setSpeed(state.savedSpeed);
-  els.speedValue.textContent = `${state.player.speed.toFixed(1)}x`;
+  els.speedValue.textContent = `${formatSpeed(state.player.speed)}`;
+}
+
+// 1.25 -> "1.25x", 1.5 -> "1.5x", 2 -> "2x"
+function formatSpeed(speed) {
+  return `${Number(speed.toFixed(2))}x`;
 }
 
 function adjustSpeed(delta) {
   if (!state.player) return;
-  const newSpeed = Math.max(0.25, Math.min(3, state.player.speed + delta));
+  const newSpeed = clampSpeed(state.player.speed + delta);
   state.player.setSpeed(newSpeed);
-  els.speedValue.textContent = `${newSpeed.toFixed(1)}x`;
+  els.speedValue.textContent = `${formatSpeed(newSpeed)}`;
   rememberSpeed(newSpeed);
 }
 
@@ -1468,9 +1473,9 @@ function handleTapTempo() {
   state.tapTempo.tap();
   const bpm = state.tapTempo.getBPM();
   if (bpm) {
-    const speed = Math.max(0.25, Math.min(3, bpm / 120));
+    const speed = clampSpeed(bpm / 120);
     state.player.setSpeed(speed);
-    els.speedValue.textContent = `${speed.toFixed(1)}x`;
+    els.speedValue.textContent = `${formatSpeed(speed)}`;
     rememberSpeed(speed);
     showToast(`BPM: ${bpm}`, 'info');
   } else {
@@ -1590,10 +1595,10 @@ function handleMidiCommand(command) {
       if (state.player) state.player.updateMaxScroll();
       break;
     case 'speedDown':
-      adjustSpeed(-0.1);
+      adjustSpeed(-SPEED_STEP);
       break;
     case 'speedUp':
-      adjustSpeed(0.1);
+      adjustSpeed(SPEED_STEP);
       break;
     case 'prevSong':
       handlePrevSong();
@@ -1781,8 +1786,8 @@ function handleKeydown(e) {
     if (action === 'playPause') togglePlayPause();
     else if (action === 'next') handleNextSong();
     else if (action === 'prev') handlePrevSong();
-    else if (action === 'speedUp') adjustSpeed(0.1);
-    else if (action === 'speedDown') adjustSpeed(-0.1);
+    else if (action === 'speedUp') adjustSpeed(SPEED_STEP);
+    else if (action === 'speedDown') adjustSpeed(-SPEED_STEP);
     return;
   }
   if (e.key === ' ') e.preventDefault();
