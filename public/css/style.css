@@ -201,8 +201,9 @@ kbd {
   width: 28px; height: 28px;
   background: linear-gradient(135deg, var(--accent), #00a8cc);
   border-radius: var(--radius-sm);
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.5'%3E%3Cpath d='M12 2a10 10 0 0 1 10 10c0 3.5-2 6.5-5 8.5-3-2-5-5-5-8.5A10 10 0 0 1 12 2z'/%3E%3C/svg%3E") center/contain no-repeat;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.5'%3E%3Cpath d='M12 2a10 10 0 0 1 10 10c0 3.5-2 6.5-5 8.5-3-2-5-5-5-8.5A10 10 0 0 1 12 2z'/%3E%3C/svg%3E") center/contain no-repeat;
+  /* Palheta com equalizador vazado — mesma marca da tela de carregamento */
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath fill='white' fill-rule='evenodd' d='M50 10C73 10 90 18 90 37C90 60 68 84 56 93.5C52.5 96.3 47.5 96.3 44 93.5C32 84 10 60 10 37C10 18 27 10 50 10ZM25 41a3 3 0 0 1 6 0v10a3 3 0 0 1-6 0zM36 35a3 3 0 0 1 6 0v22a3 3 0 0 1-6 0zM47 30a3 3 0 0 1 6 0v32a3 3 0 0 1-6 0zM58 35a3 3 0 0 1 6 0v22a3 3 0 0 1-6 0zM69 41a3 3 0 0 1 6 0v10a3 3 0 0 1-6 0z'/%3E%3C/svg%3E") center/contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath fill='white' fill-rule='evenodd' d='M50 10C73 10 90 18 90 37C90 60 68 84 56 93.5C52.5 96.3 47.5 96.3 44 93.5C32 84 10 60 10 37C10 18 27 10 50 10ZM25 41a3 3 0 0 1 6 0v10a3 3 0 0 1-6 0zM36 35a3 3 0 0 1 6 0v22a3 3 0 0 1-6 0zM47 30a3 3 0 0 1 6 0v32a3 3 0 0 1-6 0zM58 35a3 3 0 0 1 6 0v22a3 3 0 0 1-6 0zM69 41a3 3 0 0 1 6 0v10a3 3 0 0 1-6 0z'/%3E%3C/svg%3E") center/contain no-repeat;
 }
 
 .icon-btn {
