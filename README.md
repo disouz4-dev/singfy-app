@@ -14,7 +14,7 @@
 | 📋 **Setlist** | Adiciona, reordena (drag & drop), remove, persiste no localStorage |
 | 🎵 **Transposição** | Muda tom (±½ tom) mantendo qualidade dos acordes (campo harmônico) |
 | 📖 **Visualização** | Cifra com acordes sobre a letra (formato clássico 2 linhas) |
-| ▶️ **Auto-roll** | Rolagem automática por tempo (velocidade ajustável 0.25x–3x) |
+| ▶️ **Auto-roll** | Rolagem automática por tempo (velocidade ajustável 0.25x–5x, passos de 0.25x) |
 | 🎤 **Microfone** | Detecta som/silêncio via Web Audio API para sincronizar troca de música |
 | 🌙 **Modo Show** | Fullscreen, wake lock, controles grandes touch-friendly |
 | 📱 **PWA** | Instalável, funciona offline, service worker |
