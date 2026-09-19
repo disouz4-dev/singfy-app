@@ -44,51 +44,67 @@ export function bleToMidi(bytes) {
   return decodeRaw(bytes).msgs;
 }
 
+// Quantos bytes de dados a mensagem com este status carrega
+function dataLength(status) {
+  const t = status & 0xf0;
+  if (t === 0xc0 || t === 0xd0) return 1;
+  if (status === 0xf1 || status === 0xf3) return 1;
+  if (status === 0xf2) return 2;
+  if (status >= 0xf0) return 0;
+  return 2;
+}
+
+// BLE-MIDI (spec MMA): [header][timestamp][status][dados]... Cada mensagem é
+// precedida de um byte de timestamp (bit 7 = 1). Timestamp seguido de dado
+// (bit 7 = 0) = running status. Mensagens de tempo real (F8–FF) não alteram
+// o running status.
 function decodeSpec(bytes) {
-  return decodeWith((b) => {
-    if (!(b & 0x80)) return false; // sem cabeçalho válido
-    const two = (b & 0xc0) === 0xc0;
-    return two ? 2 : 1;
-  }, bytes);
-}
-
-// MIDI cru (sem timestamp): começa direto nos status bytes.
-function decodeRaw(bytes) {
-  return decodeWith(() => 0, bytes);
-}
-
-// Core dos dois modos de decode. `headerLen` devolve quantos bytes do início
-// (0, 1 ou 2) formam o cabeçalho do pacote; depois disso o stream é lido com
-// running status até consumir o buffer.
-function decodeWith(headerLen, bytes) {
   const out = [];
-  let i = 0;
   let dirty = false;
+  if (!bytes.length || !(bytes[0] & 0x80)) return { msgs: out, count: 0, clean: false };
+  let i = 1;
+  let running = null;
   while (i < bytes.length) {
-    const h = headerLen(bytes[i]);
-    if (h === false) break;
-    i += h;
-    // Mensagens MIDI dentro do pacote (até o fim do buffer).
-    let running = null;
-    while (i < bytes.length) {
-      const b = bytes[i];
-      if (b & 0x80) {
-        running = b; // status byte (início de nova mensagem)
-        i++;
-        continue;
+    const b = bytes[i];
+    if (b & 0x80) {
+      if (i + 1 < bytes.length && (bytes[i + 1] & 0x80)) {
+        i++; // b era timestamp; o próximo é status
+        const status = bytes[i++];
+        if (status >= 0xf8) { out.push([status]); continue; }
+        running = status;
+      } else {
+        i++; // timestamp seguido de dados -> running status
       }
-      if (running !== null) {
-        const len = ((running & 0xf0) === 0xc0 || (running & 0xf0) === 0xd0) ? 1 : 2;
-        if (i + len <= bytes.length) {
-          out.push([running, ...bytes.slice(i, i + len)]);
-          i += len;
-          running = null;
-          continue;
-        }
-      }
-      dirty = true; // byte solto, sem status — formato inconsistente
-      i++;
+      continue;
     }
+    if (running === null) { dirty = true; i++; continue; }
+    const len = dataLength(running);
+    if (len === 0 || i + len > bytes.length) { dirty = true; i++; continue; }
+    out.push([running, ...bytes.slice(i, i + len)]);
+    i += len;
+  }
+  return { msgs: out, count: out.length, clean: out.length > 0 && !dirty };
+}
+
+// MIDI cru (sem timestamp), com running status.
+function decodeRaw(bytes) {
+  const out = [];
+  let dirty = false;
+  let running = null;
+  let i = 0;
+  while (i < bytes.length) {
+    const b = bytes[i];
+    if (b & 0x80) {
+      i++;
+      if (b >= 0xf8) { out.push([b]); continue; }
+      running = b;
+      continue;
+    }
+    if (running === null) { dirty = true; i++; continue; }
+    const len = dataLength(running);
+    if (len === 0 || i + len > bytes.length) { dirty = true; i++; continue; }
+    out.push([running, ...bytes.slice(i, i + len)]);
+    i += len;
   }
   return { msgs: out, count: out.length, clean: out.length > 0 && !dirty };
 }
@@ -214,7 +230,10 @@ export class MidiController {
     // notificáveis do serviço MIDI.
     try {
       const chars = await service.getCharacteristics();
-      for (const ch of chars) await this.subscribeBleChar(ch, 'midi');
+      for (const ch of chars) {
+        if (ch.uuid.toLowerCase() === BLE_MIDI_CHAR) continue; // já assinada acima
+        await this.subscribeBleChar(ch, 'midi');
+      }
     } catch (_) {}
 
     // Varre os DEMAIS serviços em busca de características com notify/indicate
@@ -226,7 +245,8 @@ export class MidiController {
         if (s.uuid.toLowerCase() === BLE_MIDI_SERVICE) continue;
         let chars;
         try { chars = await s.getCharacteristics(); } catch (_) { continue; }
-        for (const ch of chars) this.subscribeBleChar(ch, s.uuid);
+        // await: Web Bluetooth só aceita uma operação GATT por vez
+        for (const ch of chars) await this.subscribeBleChar(ch, s.uuid);
       }
     } catch (_) {}
 
@@ -265,9 +285,14 @@ export class MidiController {
       return false;
     }
     this._bleSubscriptions.push(characteristic);
-    characteristic.onnotificationvaluechanged = (e) => {
-      this.handleBleNotification(e.target.value, label);
-    };
+    // O evento da Web Bluetooth é 'characteristicvaluechanged'
+    // (não existe 'notificationvaluechanged' — por isso nada chegava via BT).
+    if (!characteristic._singfyListener) {
+      characteristic._singfyListener = (e) => {
+        this.handleBleNotification(e.target.value, label);
+      };
+      characteristic.addEventListener('characteristicvaluechanged', characteristic._singfyListener);
+    }
     return true;
   }
 

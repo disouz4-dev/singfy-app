@@ -1,15 +1,15 @@
 // app.js — Aplicação principal Singfy
 // Inicialização, roteamento, estado global, integração dos módulos
 
-import { parseSongResponse, linesToHtml, linesToClassic, extractUniqueChords, normalizeLines, isSectionLike } from './parser.js?v=20260904';
+import { parseSongResponse, linesToHtml, linesToClassic, extractUniqueChords, normalizeLines, isSectionLike } from './parser.js?v=20260918';
 import { transposeChord, transposeSong, getHarmonicField, detectKey, formatChord, generateTransposeButtons } from './transpose.js';
 import { setlist, SetlistManager } from './setlist.js';
-import { AutoRollPlayer, estimateDuration, TapTempo } from './player.js?v=20250925';
-import { fetchSong, toSlug, isValidSlug, isCifraLink, fetchSpotifyPlaylistTracks, extractSpotifyPlaylistId } from './api.js?v=20250929';
+import { AutoRollPlayer, estimateDuration, TapTempo } from './player.js?v=20260918';
+import { fetchSong, toSlug, isValidSlug, isCifraLink, fetchSpotifyPlaylistTracks, extractSpotifyPlaylistId, spotifyTitleCandidates } from './api.js?v=20260918';
 import { initAuth, signInWithGoogle, signOutUser, onAuthChange, getCurrentUser, isAuthenticated, setPostLoginHandler, onSetlistReady, registerWithEmail, loginWithEmail, resetPassword, setDisplayName, createPasswordForAccount } from './auth.js?v=20260905';
 import { createSession, getInviteLink, checkUrlForSession, onSessionChange } from './session.js';
 import { VoiceSync } from './voicesync.js?v=20260224';
-import { MidiController } from './midi.js?v=20260913';
+import { MidiController } from './midi.js?v=20260918';
 
 // ===== Versão do App =====
 const APP_VERSION = 'v1.5.1';
@@ -96,6 +96,9 @@ async function init() {
     onSetlistReady(() => {
       updateSetlistBadge();
       if (state.currentScreen === 'my-setlists') renderMySetlists();
+      // Convite aberto antes do login: entra agora que a nuvem já carregou
+      const pending = sessionStorage.getItem('pendingSessionId');
+      if (pending && getCurrentUser()) joinSessionFromUrl(pending);
     });
   } catch (err) {
     console.error('Erro na autenticação (modo offline):', err);
@@ -590,19 +593,33 @@ async function joinSessionFromUrl(sessionId) {
   
   const user = getCurrentUser();
   if (!user) {
+    // Retomado em onSetlistReady, depois do login + carga da nuvem
     sessionStorage.setItem('pendingSessionId', sessionId);
+    showToast('Faça login para abrir o setlist compartilhado', 'info');
     return;
   }
+  sessionStorage.removeItem('pendingSessionId');
   
   try {
     const result = await joinSession(sessionId, user.uid);
-    if (result.setlist) {
-      const { setlist } = await import('./setlist.js');
-      setlist.import(JSON.stringify(result.setlist));
-      updateSetlistBadge();
-      renderSetlist();
-      showToast('Entrou na sessão!', 'success');
+    // Sessões antigas guardavam o setlist como string JSON
+    let data = result.setlist;
+    if (typeof data === 'string') {
+      try { data = JSON.parse(data); } catch { data = null; }
     }
+    if (!data || !Array.isArray(data.songs)) throw new Error('Sessão sem setlist');
+    // Nunca passa "playlists" adiante: import() faria importAll e apagaria
+    // as setlists do convidado
+    const { playlists, ...shared } = data;
+    const { setlist } = await import('./setlist.js');
+    if (!setlist.import(JSON.stringify(shared)) || setlist.getActive()?.songs.length === 0) {
+      showToast('Este link é de uma versão antiga e veio sem as cifras. Peça um link novo.', 'warning');
+      return;
+    }
+    updateSetlistBadge();
+    renderSetlist();
+    showScreen('setlist');
+    showToast(`Setlist "${shared.name || 'compartilhada'}" adicionada (${setlist.getActive().songs.length} músicas)`, 'success');
   } catch (err) {
     console.error('Erro ao entrar na sessão:', err);
     showToast('Sessão não encontrada ou expirada', 'error');
@@ -688,7 +705,16 @@ async function handleSpotifyImport() {
       els.spotifyProgress.textContent = `Buscando ${i + 1}/${tracks.length}: ${t.title}`;
     }
     try {
-      const parsed = await fetchSong(t.artist, t.title);
+      let parsed = null, lastErr = null;
+      for (const title of spotifyTitleCandidates(t.title)) {
+        try {
+          parsed = await fetchSong(t.mainArtist || t.artist, title);
+          if (parsed && parsed.lines && parsed.lines.length > 0) break;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      if (!parsed && lastErr) throw lastErr;
       if (parsed && parsed.lines && parsed.lines.length > 0) {
         const added = addSongToSetlist(parsed);
         if (added) {
@@ -709,7 +735,14 @@ async function handleSpotifyImport() {
   }
 
   try {
-    if (els.spotifyProgress) els.spotifyProgress.hidden = true;
+    if (els.spotifyProgress) {
+      // Mostra quais não foram encontradas (antes só ia para o console)
+      if (fail > 0) {
+        els.spotifyProgress.textContent = `Não encontradas no Cifra Club (${fail}): ${failedTracks.join(' · ')}`;
+      } else {
+        els.spotifyProgress.hidden = true;
+      }
+    }
     if (els.btnFetchSpotify) els.btnFetchSpotify.disabled = false;
     renderSetlist();
     updateSetlistBadge();
@@ -1076,7 +1109,16 @@ async function handleShareSession() {
     return;
   }
   
-  const setlistData = setlist.export();
+  const setlistData = setlist.exportForShare();
+  if (setlistData.songs.length === 0) {
+    showToast('Setlist vazia', 'warning');
+    return;
+  }
+  // Documento do Firestore tem limite de 1 MiB
+  if (new Blob([JSON.stringify(setlistData)]).size > 900 * 1024) {
+    showToast('Setlist grande demais para compartilhar. Divida em duas.', 'error');
+    return;
+  }
   try {
     const sessionId = await createSession(user.uid, setlistData);
     const link = getInviteLink(sessionId);
@@ -1220,7 +1262,7 @@ function transposeKeyBySemitones(key, semitones) {
   const n = ENHARMONIC[base] || base;
   const idx = NOTE_ORDER.indexOf(n);
   if (idx === -1) return key;
-  return NOTE_ORDER[(idx + semitones + 12) % 12] + (isMinor ? 'm' : '');
+  return NOTE_ORDER[(((idx + semitones) % 12) + 12) % 12] + (isMinor ? 'm' : '');
 }
 
 function renderShowCifra() {
@@ -1669,8 +1711,10 @@ function handlePrevSong() {
     applyCurrentSpeed();
     if (state.player) {
       state.player.stop();
+      state.player.setDuration(estimateDurationFromSong(song));
       updatePlayPauseIcon(false);
     }
+    state.tapTempo.reset();
     showToast(`Anterior: ${song.metadata.name}`, 'info');
   }
 }
@@ -1683,8 +1727,10 @@ function handleNextSong() {
     if (state.player) {
       // Fica pausado após trocar de música; o play é feito manualmente (botão/pedal MIDI).
       state.player.stop();
+      state.player.setDuration(estimateDurationFromSong(song));
       updatePlayPauseIcon(false);
     }
+    state.tapTempo.reset();
     showToast(`Próxima: ${song.metadata.name}`, 'success');
   } else {
     // Fim do setlist
@@ -1697,32 +1743,54 @@ function handleNextSong() {
 }
 
 // ===== Teclado =====
+// Pedais/passadores de página Bluetooth em modo teclado mandam
+// PageUp/PageDown, setas, Espaço ou Enter.
+const SHOW_KEY_ACTIONS = {
+  ' ': 'playPause',
+  'Enter': 'playPause',
+  'MediaPlayPause': 'playPause',
+  'ArrowRight': 'next',
+  'PageDown': 'next',
+  'MediaTrackNext': 'next',
+  'ArrowLeft': 'prev',
+  'PageUp': 'prev',
+  'MediaTrackPrevious': 'prev',
+  'ArrowUp': 'speedUp',
+  'ArrowDown': 'speedDown'
+};
+
 function handleKeydown(e) {
   // Atalhos globais
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  
+  // Tap tempo (shift+space) — tratado antes para não disparar play/pause junto
+  if (e.shiftKey && e.code === 'Space') {
+    e.preventDefault();
+    handleTapTempo();
+    return;
+  }
+  
+  const action = state.currentScreen === 'show' ? SHOW_KEY_ACTIONS[e.key] : null;
+  if (action) {
+    // Evita que Espaço/Enter também "cliquem" o botão focado (ação dupla)
+    e.preventDefault();
+    if (document.activeElement && document.activeElement.tagName === 'BUTTON') document.activeElement.blur();
+    // Pedal segurado não deve pular várias músicas
+    if (e.repeat && (action === 'next' || action === 'prev' || action === 'playPause')) return;
+    if (action === 'playPause') togglePlayPause();
+    else if (action === 'next') handleNextSong();
+    else if (action === 'prev') handlePrevSong();
+    else if (action === 'speedUp') adjustSpeed(0.1);
+    else if (action === 'speedDown') adjustSpeed(-0.1);
+    return;
+  }
+  if (e.key === ' ') e.preventDefault();
   
   switch (e.key) {
     case 's':
     case 'S':
-      if (state.currentScreen !== 'my-setlists' && state.currentScreen !== 'setlist') showMySetlists();
-      break;
-    case ' ':
-      e.preventDefault();
-      if (state.currentScreen === 'show') togglePlayPause();
-      break;
-    case 'ArrowRight':
-      if (state.currentScreen === 'show') handleNextSong();
-      break;
-    case 'ArrowLeft':
-      if (state.currentScreen === 'show') handlePrevSong();
-      break;
-    case 'ArrowUp':
-      e.preventDefault();
-      if (state.currentScreen === 'show') adjustSpeed(0.1);
-      break;
-    case 'ArrowDown':
-      e.preventDefault();
-      if (state.currentScreen === 'show') adjustSpeed(-0.1);
+      if (state.currentScreen !== 'my-setlists' && state.currentScreen !== 'setlist' && state.currentScreen !== 'login') showMySetlists();
       break;
     case 't':
     case 'T':
@@ -1738,21 +1806,6 @@ function handleKeydown(e) {
       break;
   }
   
-  // Tap tempo (shift+space)
-  if (e.shiftKey && e.code === 'Space') {
-    e.preventDefault();
-    state.tapTempo.tap();
-    const bpm = state.tapTempo.getBPM();
-    if (bpm) {
-      showToast(`BPM: ${bpm}`, 'info');
-      if (state.player) {
-        // Ajusta duração estimada baseado no BPM
-        // Assumindo 4/4, ~120 compassos = duração
-        const duration = estimateDuration(bpm, 120);
-        state.player.setDuration(duration);
-      }
-    }
-  }
 }
 
 // ===== Fullscreen & Wake Lock =====
@@ -1913,11 +1966,11 @@ function showToast(message, type = 'info') {
 // ===== Utilidades =====
 function escapeHtml(str) {
   return String(str)
-    .replace(/&/g, '&')
-    .replace(/</g, '<')
-    .replace(/>/g, '>')
-    .replace(/"/g, '"')
-    .replace(/'/g, "'");
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // ===== Service Worker Registration (para PWA offline) =====

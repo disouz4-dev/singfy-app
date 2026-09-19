@@ -359,6 +359,26 @@ export class SetlistManager {
     }, null, 2);
   }
 
+  // Setlist ativa como OBJETO, com as cifras (lines), para compartilhar numa
+  // sessão. export() não serve: devolve string e sem lines, e o _sanitize do
+  // convidado descartava todas as músicas.
+  exportForShare() {
+    const active = this.getActive();
+    const data = {
+      name: active?.name || "Setlist compartilhada",
+      eventDate: active?.eventDate || "",
+      venue: active?.venue || "",
+      songs: (active?.songs || []).map(s => ({
+        metadata: s.metadata,
+        lines: s.lines,
+        transpose: s.transpose || 0,
+        customKey: s.customKey || null
+      }))
+    };
+    // Firestore rejeita campos undefined; o round-trip JSON remove todos
+    return JSON.parse(JSON.stringify(data));
+  }
+
   exportAll() {
     return JSON.stringify({
       playlists: this.playlists,

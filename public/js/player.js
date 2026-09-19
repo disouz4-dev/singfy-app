@@ -44,7 +44,13 @@ export class AutoRollPlayer {
 
   // Define velocidade (0.5 a 2.0)
   setSpeed(speed) {
-    this.speed = Math.max(0.25, Math.min(3, speed));
+    const newSpeed = Math.max(0.25, Math.min(3, speed));
+    // Rebase do startTime para a posição atual não pular ao mudar a velocidade
+    if (this.isPlaying && this.startTime) {
+      const elapsed = (Date.now() - this.startTime) * this.speed;
+      this.startTime = Date.now() - elapsed / newSpeed;
+    }
+    this.speed = newSpeed;
   }
 
   // Calcula altura rolável
@@ -62,7 +68,11 @@ export class AutoRollPlayer {
     
     this.updateMaxScroll();
     this.isPlaying = true;
-    this.startTime = Date.now() - (this.scrollTop / this.maxScroll) * this.duration * 1000 / this.speed;
+    // Retoma de onde a cifra está (inclusive rolagem manual); evita 0/0 = NaN
+    // quando a cifra cabe inteira na tela
+    if (this.container) this.scrollTop = this.container.scrollTop;
+    const progress = this.maxScroll > 0 ? Math.min(1, this.scrollTop / this.maxScroll) : 0;
+    this.startTime = Date.now() - progress * this.duration * 1000 / this.speed;
     this.lastSoundTime = Date.now();
     this.silenceDetected = false;
     
@@ -252,6 +262,9 @@ export class TapTempo {
 
   tap() {
     const now = Date.now();
+    // Pausa longa entre batidas = nova contagem (senão o BPM despenca)
+    const last = this.taps[this.taps.length - 1];
+    if (last && now - last > 2000) this.taps = [];
     this.taps.push(now);
     // Mantém apenas as últimas 64 batidas para não acumular memória,
     // mas nunca impede de bater novamente (batida infinita).
