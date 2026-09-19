@@ -134,8 +134,11 @@ export class SetlistManager {
     }
   }
 
+  // Agrupa alterações seguidas (ex.: trocar de música no show) num envio só.
+  // Só as setlists que mudaram são gravadas (ver auth.js).
   syncToCloud() {
-    try {
+    clearTimeout(this._syncTimer);
+    this._syncTimer = setTimeout(() => {
       import('./auth.js?v=20260905').then(async ({ isAuthenticated, saveSetlistToCloud }) => {
         if (!isAuthenticated()) return;
         await saveSetlistToCloud(JSON.stringify({
@@ -143,7 +146,7 @@ export class SetlistManager {
           activePlaylistId: this.activePlaylistId
         }));
       }).catch(() => {});
-    } catch (_) {}
+    }, 1500);
   }
 
   // === Gestão de setlists ===

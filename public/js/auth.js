@@ -22,7 +22,11 @@ import {
   getFirestore, 
   doc, 
   getDoc, 
+  getDocs,
   setDoc, 
+  deleteDoc,
+  deleteField,
+  collection,
   onSnapshot 
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
@@ -70,6 +74,7 @@ export function initAuth() {
         if (postLoginHandler) postLoginHandler(user);
         await loadUserSetlist(user.uid);
       } else {
+        resetCloudState();
         import('./setlist.js').then(({ setlist }) => setlist.load());
         notifyListeners(null);
       }
@@ -181,62 +186,42 @@ export async function signOutUser() {
 
 // ===== Firestore: sincroniza setlist na nuvem =====
 
-async function loadUserSetlist(uid) {
-  if (!db) return;
-  try {
-    const { setlist } = await import('./setlist.js');
-    let userDoc;
-    try {
-      userDoc = await getDoc(doc(db, 'users', uid));
-    } catch (err) {
-      // Firestore indisponível/offline/permissão -> mantém o localStorage
-      if (err?.code !== 'unavailable' && err?.code !== 'permission-denied') {
-        console.warn('Erro ao ler setlist do Firestore:', err);
-      }
-      setlist.load();
-      if (setlistReadyHandler) setlistReadyHandler();
-      return;
-    }
-    const stored = userDoc.exists() ? userDoc.data()?.setlist : null;
-    const hasCloudData = stored && (
-      (Array.isArray(stored.playlists) && stored.playlists.length > 0) ||
-      (Array.isArray(stored.songs) && stored.songs.length > 0)
-    );
+// ===== Nuvem: formato v2 (uma setlist por documento) =====
+// users/{uid}                  -> { version: 2, playlistIds, activePlaylistId, updatedAt }
+// users/{uid}/playlists/{id}   -> { playlist, updatedAt }
+// O formato antigo guardava tudo em users/{uid}.setlist — um único documento
+// com limite de 1 MiB para TODAS as setlists. Agora o limite vale por setlist.
+const CLOUD_VERSION = 2;
+const PLAYLIST_DOC_LIMIT = 1000 * 1024; // 1 MiB por documento, com folga
+const sentPlaylistHashes = new Map();   // id -> hash do que está na nuvem
+let lastMetaHash = null;
+let legacyFieldPresent = false;         // users/{uid}.setlist ainda existe
+let cloudReady = false;                 // nuvem já carregada nesta sessão
+let saveChain = Promise.resolve();      // salvamentos em série
+let lastCloudErrorAt = 0;
 
-    const cloudUpdatedAt = Date.parse(userDoc.data()?.updatedAt || '') || 0;
-    const localUpdatedAt = setlist.getLocalUpdatedAt();
-    if (hasCloudData && localUpdatedAt > cloudUpdatedAt && setlist.getAllPlaylists().length > 0) {
-      // O aparelho tem alterações mais novas que a nuvem (ex.: o salvamento
-      // na nuvem falhou ou não terminou antes de recarregar). Antes a nuvem
-      // sempre vencia e músicas excluídas voltavam. Reenvia o aparelho.
-      await saveSetlistToCloud(JSON.stringify({ playlists: setlist.playlists, activePlaylistId: setlist.activePlaylistId }));
-    } else if (hasCloudData) {
-      // A nuvem tem setlists mais novas -> usa a nuvem
-      setlist.import(JSON.stringify(stored));
-    } else {
-      // Nuvem vazia. Se o dispositivo tem setlists locais, envia para a nuvem
-      // (sincroniza de local -> nuvem), para que apareçam em outros dispositivos.
-      const local = setlist.getAllPlaylists();
-      if (local.length > 0) {
-        const all = { playlists: setlist.playlists, activePlaylistId: setlist.activePlaylistId };
-        await saveSetlistToCloud(JSON.stringify(all));
-        console.log('Setlists locais enviadas para a nuvem:', local.length);
-      } else {
-        setlist.load();
-      }
-    }
-    if (setlistReadyHandler) setlistReadyHandler();
-  } catch (err) {
-    console.warn('Erro ao carregar setlist do Firestore:', err);
-    import('./setlist.js').then(({ setlist }) => setlist.load()).finally(() => {
-      if (setlistReadyHandler) setlistReadyHandler();
-    });
-  }
+// Setlists que não conseguiram subir (ex.: > 1 MB). Ficam lembradas neste
+// aparelho para nunca serem descartadas ao carregar a nuvem de outro aparelho.
+const PENDING_KEY = 'singfy_cloud_pending_v1';
+function getPendingIds() {
+  try { return new Set(JSON.parse(localStorage.getItem(PENDING_KEY)) || []); } catch (_) { return new Set(); }
+}
+function setPendingIds(set) {
+  try { localStorage.setItem(PENDING_KEY, JSON.stringify([...set])); } catch (_) {}
 }
 
-// Limite de 1 MiB por documento do Firestore (com folga para os metadados)
-const CLOUD_DOC_LIMIT = 1000 * 1024;
-let lastCloudErrorAt = 0;
+function hashString(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  return String(h >>> 0) + ':' + str.length;
+}
+
+function resetCloudState() {
+  sentPlaylistHashes.clear();
+  lastMetaHash = null;
+  legacyFieldPresent = false;
+  cloudReady = false;
+}
 
 function notifyCloudSaveFailed(reason) {
   // Evento para a UI avisar (no máximo a cada 30 s)
@@ -245,24 +230,172 @@ function notifyCloudSaveFailed(reason) {
   window.dispatchEvent(new CustomEvent('singfy:cloud-save-failed', { detail: { reason } }));
 }
 
-export async function saveSetlistToCloud(setlistData) {
-  if (!auth || !currentUser || !db) return false;
-  if (new Blob([setlistData]).size > CLOUD_DOC_LIMIT) {
-    console.error('Setlists grandes demais para a nuvem:', setlistData.length);
-    notifyCloudSaveFailed('too-large');
-    return false;
+async function readCloudSetlists(uid) {
+  const userDoc = await getDoc(doc(db, 'users', uid));
+  if (!userDoc.exists()) return { playlists: [], activePlaylistId: null, updatedAt: 0, legacy: null };
+  const data = userDoc.data() || {};
+  const updatedAt = Date.parse(data.updatedAt || '') || 0;
+  legacyFieldPresent = data.setlist !== undefined;
+
+  if (data.version === CLOUD_VERSION && Array.isArray(data.playlistIds)) {
+    const snap = await getDocs(collection(db, 'users', uid, 'playlists'));
+    const byId = {};
+    snap.forEach(d => {
+      const pl = d.data() && d.data().playlist;
+      // Registra tudo que existe na nuvem (inclusive órfãos, que serão apagados)
+      sentPlaylistHashes.set(d.id, pl ? hashString(JSON.stringify(pl)) : '');
+      if (pl) byId[d.id] = pl;
+    });
+    return {
+      playlistIds: data.playlistIds,
+      byId,
+      playlists: data.playlistIds.map(id => byId[id]).filter(Boolean),
+      activePlaylistId: data.activePlaylistId || null,
+      updatedAt,
+      legacy: null
+    };
   }
+  // Formato antigo: { playlists } ou { songs } em users/{uid}.setlist
+  return { playlists: [], activePlaylistId: null, updatedAt, legacy: data.setlist || null };
+}
+
+async function loadUserSetlist(uid) {
+  if (!db) return;
+  resetCloudState();
+  const { setlist } = await import('./setlist.js');
   try {
-    await setDoc(doc(db, 'users', currentUser.uid), {
-      setlist: JSON.parse(setlistData),
-      updatedAt: new Date().toISOString()
-    }, { merge: true });
-    return true;
+    let cloud;
+    try {
+      cloud = await readCloudSetlists(uid);
+    } catch (err) {
+      // Firestore indisponível/offline/permissão -> mantém o localStorage
+      if (err?.code !== 'unavailable' && err?.code !== 'permission-denied') {
+        console.warn('Erro ao ler setlist do Firestore:', err);
+      }
+      setlist.load();
+      return; // cloudReady continua false: não sobrescreve uma nuvem que não lemos
+    }
+
+    const legacy = cloud.legacy;
+    const hasCloudData = cloud.playlists.length > 0 || !!(legacy && (
+      (Array.isArray(legacy.playlists) && legacy.playlists.length > 0) ||
+      (Array.isArray(legacy.songs) && legacy.songs.length > 0)
+    ));
+    const localNewer = setlist.getLocalUpdatedAt() > cloud.updatedAt && setlist.getAllPlaylists().length > 0;
+
+    if (hasCloudData && !localNewer) {
+      // Nuvem mais nova -> usa a nuvem
+      if (legacy) {
+        setlist.import(JSON.stringify(legacy));
+      } else {
+        // Setlist listada no índice mas sem documento na nuvem (ex.: passou de
+        // 1 MB e não subiu): mantém a cópia deste aparelho em vez de perdê-la
+        const local = new Map(setlist.getAllPlaylists().map(p => [p.id, setlist.getPlaylist(p.id)]));
+        const merged = cloud.playlistIds.map(id => cloud.byId[id] || local.get(id)).filter(Boolean);
+        // ...e as que nunca conseguiram subir, mesmo que outro aparelho tenha
+        // salvo um índice sem elas
+        for (const id of getPendingIds()) {
+          if (!cloud.playlistIds.includes(id) && local.has(id)) merged.push(local.get(id));
+        }
+        setlist.importAll(JSON.stringify({ playlists: merged, activePlaylistId: cloud.activePlaylistId }));
+      }
+    } else if (!hasCloudData && setlist.getAllPlaylists().length === 0) {
+      setlist.load();
+    }
+    // Aparelho mais novo (o salvamento anterior falhou ou não terminou antes
+    // de recarregar) ou nuvem vazia: o aparelho vence e é enviado abaixo.
+
+    cloudReady = true;
+    // Migra do formato antigo / envia o que o aparelho tem de novo
+    // (só grava o que mudou; se nada mudou, não escreve nada)
+    await saveSetlistToCloud(JSON.stringify({ playlists: setlist.playlists, activePlaylistId: setlist.activePlaylistId }));
   } catch (err) {
+    console.warn('Erro ao carregar setlist do Firestore:', err);
+    setlist.load();
+  } finally {
+    if (setlistReadyHandler) setlistReadyHandler();
+  }
+}
+
+export function saveSetlistToCloud(setlistData) {
+  if (!auth || !currentUser || !db) return Promise.resolve(false);
+  // Antes de ler a nuvem, não escreve (evita um aparelho desatualizado
+  // sobrescrever a nuvem durante o login). O que mudar nesse meio-tempo fica
+  // com updatedAt local mais novo e é enviado ao terminar a carga.
+  if (!cloudReady) return Promise.resolve(false);
+  const uid = currentUser.uid;
+  let data;
+  try { data = JSON.parse(setlistData); } catch (_) { return Promise.resolve(false); }
+  saveChain = saveChain.then(() => writeCloud(uid, data)).catch((err) => {
     console.error('Erro ao salvar setlist na nuvem:', err);
     notifyCloudSaveFailed(err && err.code);
     return false;
+  });
+  return saveChain;
+}
+
+async function writeCloud(uid, data) {
+  if (!currentUser || currentUser.uid !== uid) return false; // trocou de conta
+  const playlists = Array.isArray(data.playlists) ? data.playlists : [];
+  const ids = playlists.map(p => p.id);
+  const now = new Date().toISOString();
+  let changed = false;
+  let failure = null;
+  const pending = getPendingIds();
+
+  for (const pl of playlists) {
+    const json = JSON.stringify(pl);
+    const h = hashString(json);
+    if (sentPlaylistHashes.get(pl.id) === h) continue;
+    if (new Blob([json]).size > PLAYLIST_DOC_LIMIT) {
+      console.error('Setlist grande demais para a nuvem:', pl.name, json.length);
+      failure = failure || 'too-large';
+      pending.add(pl.id);
+      continue;
+    }
+    try {
+      await setDoc(doc(db, 'users', uid, 'playlists', pl.id), { playlist: pl, updatedAt: now });
+      sentPlaylistHashes.set(pl.id, h);
+      pending.delete(pl.id);
+      changed = true;
+    } catch (err) {
+      console.error('Erro ao salvar setlist na nuvem:', pl.name, err);
+      failure = failure || (err && err.code) || 'error';
+      pending.add(pl.id);
+    }
   }
+  // Excluídas neste aparelho deixam de ser pendentes
+  for (const id of [...pending]) if (!ids.includes(id)) pending.delete(id);
+  setPendingIds(pending);
+
+  // Setlists excluídas (e órfãs de outros aparelhos)
+  for (const id of [...sentPlaylistHashes.keys()]) {
+    if (ids.includes(id)) continue;
+    try {
+      await deleteDoc(doc(db, 'users', uid, 'playlists', id));
+      sentPlaylistHashes.delete(id);
+      changed = true;
+    } catch (err) {
+      failure = failure || (err && err.code) || 'error';
+    }
+  }
+
+  const meta = { version: CLOUD_VERSION, playlistIds: ids, activePlaylistId: data.activePlaylistId || null };
+  const metaHash = hashString(JSON.stringify(meta));
+  if (changed || metaHash !== lastMetaHash || legacyFieldPresent) {
+    const payload = { ...meta, updatedAt: now };
+    if (legacyFieldPresent) payload.setlist = deleteField(); // conclui a migração
+    try {
+      await setDoc(doc(db, 'users', uid), payload, { merge: true });
+      lastMetaHash = metaHash;
+      legacyFieldPresent = false;
+    } catch (err) {
+      failure = failure || (err && err.code) || 'error';
+    }
+  }
+
+  if (failure) notifyCloudSaveFailed(failure);
+  return !failure;
 }
 
 export function watchSetlist(uid, callback) {
