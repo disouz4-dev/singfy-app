@@ -413,6 +413,14 @@ export class SetlistManager {
     return JSON.parse(JSON.stringify(data));
   }
 
+  // Logout: apaga as setlists deste aparelho (sem enviar nada à nuvem)
+  clearLocalData() {
+    clearTimeout(this._syncTimer);
+    this.playlists = [];
+    this.activePlaylistId = null;
+    try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+  }
+
   getPlaylist(id) {
     return this.playlists.find(p => p.id === id) || null;
   }

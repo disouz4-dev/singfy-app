@@ -31,6 +31,16 @@
   </script>
   <div id="app">
     <!-- Tela de Login -->
+    <!-- Carregamento: aparece enquanto o login é verificado (antes o login
+         aparecia e sumia a cada recarga) -->
+    <section id="screen-loading" class="screen active" role="main" aria-label="Carregando" aria-busy="true">
+      <div class="loading-main">
+        <h1 class="logo">Singfy</h1>
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <p class="loading-text">Carregando suas setlists...</p>
+      </div>
+    </section>
+
     <section id="screen-login" class="screen" role="main" aria-label="Login">
       <main class="login-main">
         <div class="login-card">
@@ -155,6 +165,11 @@
               <path d="M12 5v14M5 12h14"/>
             </svg>
             <span>Nova</span>
+          </button>
+          <button id="btn-logout" class="icon-btn" aria-label="Sair da conta" title="Sair da conta">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>
+            </svg>
           </button>
         </div>
       </header>
