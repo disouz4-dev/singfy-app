@@ -7,7 +7,7 @@ import { setlist, SetlistManager } from './setlist.js';
 import { AutoRollPlayer, estimateDuration, TapTempo, SPEED_STEP, clampSpeed } from './player.js?v=20260919';
 import { fetchSong, toSlug, isValidSlug, isCifraLink, fetchSpotifyPlaylistTracks, extractSpotifyPlaylistId, spotifyTitleCandidates } from './api.js?v=20260918';
 import { initAuth, signInWithGoogle, signOutUser, onAuthChange, getCurrentUser, isAuthenticated, setPostLoginHandler, onSetlistReady, registerWithEmail, loginWithEmail, resetPassword, setDisplayName, createPasswordForAccount } from './auth.js?v=20260905';
-import { createSession, getInviteLink, checkUrlForSession, onSessionChange } from './session.js';
+import { createSession, getInviteLink, checkUrlForSession, onSessionChange, joinSession, updateSessionPlayback, updateSessionSetlist, endSession, leaveSession } from './session.js';
 import { VoiceSync } from './voicesync.js?v=20260224';
 import { MidiController } from './midi.js?v=20260918';
 
@@ -82,10 +82,18 @@ async function init() {
     // Inicializa autenticação (não bloqueia UI)
     await initAuth();
     
+    // Modo sync: escuta a sessão, envia mudanças da setlist (host) e retoma
+    // uma sessão ativa após recarregar a página
+    onSessionChange(handleSessionUpdate);
+    setlist.onChange = debounce(pushSessionSetlistIfChanged, 1000);
+    setInterval(syncHeartbeat, SYNC_HEARTBEAT_MS);
+
     // Verifica se há sessão na URL (convite)
     const sessionId = checkUrlForSession();
     if (sessionId) {
       await joinSessionFromUrl(sessionId);
+    } else {
+      await resumeSync();
     }
     
     // Listener de auth
@@ -281,6 +289,8 @@ function bindEvents() {
   if (els.speedUp) els.speedUp.addEventListener('click', () => adjustSpeed(SPEED_STEP));
   if (els.btnTapTempo) els.btnTapTempo.addEventListener('click', handleTapTempo);
   if (els.btnMidi) els.btnMidi.addEventListener('click', handleMidiToggle);
+  const syncBadge = document.getElementById('sync-badge');
+  if (syncBadge) syncBadge.addEventListener('click', handleSyncBadgeClick);
   if (els.fontDown) els.fontDown.addEventListener('click', () => adjustFontSize(-1));
   if (els.fontUp) els.fontUp.addEventListener('click', () => adjustFontSize(1));
   if (els.showHideTabs) els.showHideTabs.addEventListener('click', toggleHideTabs);
@@ -602,6 +612,11 @@ async function joinSessionFromUrl(sessionId) {
   
   try {
     const result = await joinSession(sessionId, user.uid);
+    // Já está nesta sessão (ex.: host abriu o próprio link, ou recarregou)
+    if (state.sync && state.sync.sessionId === sessionId) {
+      showToast('Você já está nesta sessão', 'info');
+      return;
+    }
     // Sessões antigas guardavam o setlist como string JSON
     let data = result.setlist;
     if (typeof data === 'string') {
@@ -616,10 +631,23 @@ async function joinSessionFromUrl(sessionId) {
       showToast('Este link é de uma versão antiga e veio sem as cifras. Peça um link novo.', 'warning');
       return;
     }
+    setSync({
+      sessionId,
+      role: result.isHost ? 'host' : 'guest',
+      playlistId: setlist.getActive().id,
+      following: true,
+      lastSeq: 0,
+      setlistHash: hashString(JSON.stringify(result.setlist))
+    });
     updateSetlistBadge();
     renderSetlist();
     showScreen('setlist');
-    showToast(`Setlist "${shared.name || 'compartilhada'}" adicionada (${setlist.getActive().songs.length} músicas)`, 'success');
+    showToast(`Setlist "${shared.name || 'compartilhada'}" adicionada (${setlist.getActive().songs.length} músicas). Modo sync ativo: você acompanha o host.`, 'success');
+    // Show já em andamento: entra direto na música/posição do host
+    if (!result.isHost) {
+      state.lastRemotePlayback = result.playback;
+      applyRemotePlayback(result.playback);
+    }
   } catch (err) {
     console.error('Erro ao entrar na sessão:', err);
     showToast('Sessão não encontrada ou expirada', 'error');
@@ -1109,6 +1137,12 @@ async function handleShareSession() {
     return;
   }
   
+  // Já é host desta setlist: mostra o mesmo link (não cria outra sessão)
+  if (state.sync && state.sync.role === 'host' && state.sync.playlistId === setlist.getActive()?.id) {
+    showShareModal(getInviteLink(state.sync.sessionId));
+    return;
+  }
+  
   const setlistData = setlist.exportForShare();
   if (setlistData.songs.length === 0) {
     showToast('Setlist vazia', 'warning');
@@ -1122,10 +1156,21 @@ async function handleShareSession() {
   try {
     const sessionId = await createSession(user.uid, setlistData);
     const link = getInviteLink(sessionId);
+    setSync({
+      sessionId,
+      role: 'host',
+      playlistId: setlist.getActive().id,
+      following: true,
+      lastSeq: 0,
+      setlistHash: hashString(JSON.stringify(setlistData))
+    });
+    broadcastPlayback();
     
-    // Copia para clipboard
-    await navigator.clipboard.writeText(link);
-    showToast('Link copiado! Envie para a banda', 'success');
+    // Copia para clipboard (pode ser bloqueado no celular; o modal mostra o link)
+    try {
+      await navigator.clipboard.writeText(link);
+      showToast('Link copiado! Envie para a banda', 'success');
+    } catch (_) {}
     
     // Mostra modal com o link
     showShareModal(link);
@@ -1146,7 +1191,9 @@ function showShareModal(link) {
         <input type="text" value="${link}" readonly id="modal-link-input">
         <button class="btn btn-ghost" id="modal-copy">Copiar</button>
       </div>
+      <p class="modal-sync-info">Modo sync: você é o <strong>host</strong>. Play, pause, troca de música e velocidade são repetidos nos aparelhos da banda. Cada um escolhe se vê a cifra ou só a letra.${state.sync ? ` <br>Na sessão: <strong>${state.sync.participants || 1}</strong> aparelho(s).` : ''}</p>
       <div class="modal-actions">
+        ${state.sync && state.sync.role === 'host' ? '<button class="btn btn-ghost danger" id="modal-end">Encerrar sessão</button>' : ''}
         <button class="btn btn-primary" id="modal-close">Fechar</button>
       </div>
     </div>
@@ -1166,6 +1213,12 @@ function showShareModal(link) {
   });
   
   modal.querySelector('#modal-close').addEventListener('click', () => modal.remove());
+  const endBtn = modal.querySelector('#modal-end');
+  if (endBtn) endBtn.addEventListener('click', async () => {
+    if (!confirm('Encerrar a sessão? A banda deixa de acompanhar você.')) return;
+    modal.remove();
+    await endSyncSession();
+  });
   modal.addEventListener('click', (e) => {
     if (e.target === modal) modal.remove();
   });
@@ -1200,6 +1253,8 @@ function startShowMode() {
   }
   setupAutoHideBars();
   requestWakeLock();
+  updateSyncBadge();
+  broadcastPlayback();
 }
 
 function stopShowMode() {
@@ -1209,6 +1264,7 @@ function stopShowMode() {
   }
   if (state.voiceSync) state.voiceSync.stop();
   releaseWakeLock();
+  broadcastPlayback();
 }
 
 function loadCurrentSong() {
@@ -1392,6 +1448,7 @@ function initPlayer() {
     onSongEnd: () => {
       // Ao terminar a rolagem, para sem avançar automaticamente para a próxima música.
       updatePlayPauseIcon(false);
+      broadcastPlayback();
     },
     onSilence: () => {
       // Silêncio detectado - opcional: auto-pular
@@ -1424,7 +1481,7 @@ function estimateDurationFromSong(song) {
 }
 
 function togglePlayPause() {
-  if (!state.player) return;
+  if (!state.player || blockedByHost()) return;
   
   if (state.player.isPlaying) {
     state.player.pause();
@@ -1434,6 +1491,7 @@ function togglePlayPause() {
     updatePlayPauseIcon(true);
     requestWakeLock();
   }
+  broadcastPlayback();
 }
 
 function updatePlayPauseIcon(playing) {
@@ -1461,15 +1519,16 @@ function formatSpeed(speed) {
 }
 
 function adjustSpeed(delta) {
-  if (!state.player) return;
+  if (!state.player || blockedByHost()) return;
   const newSpeed = clampSpeed(state.player.speed + delta);
   state.player.setSpeed(newSpeed);
   els.speedValue.textContent = `${formatSpeed(newSpeed)}`;
   rememberSpeed(newSpeed);
+  broadcastPlayback();
 }
 
 function handleTapTempo() {
-  if (!state.player) return;
+  if (!state.player || blockedByHost()) return;
   state.tapTempo.tap();
   const bpm = state.tapTempo.getBPM();
   if (bpm) {
@@ -1477,6 +1536,7 @@ function handleTapTempo() {
     state.player.setSpeed(speed);
     els.speedValue.textContent = `${formatSpeed(speed)}`;
     rememberSpeed(speed);
+    broadcastPlayback();
     showToast(`BPM: ${bpm}`, 'info');
   } else {
     showToast('Toque novamente para definir o andamento', 'info');
@@ -1572,16 +1632,20 @@ function handleMidiCommand(command) {
   if (state.currentScreen !== 'show') return;
   switch (command) {
     case 'play':
+      if (blockedByHost()) break;
       if (state.player && !state.player.isPlaying) {
         state.player.start();
         updatePlayPauseIcon(true);
         requestWakeLock();
+        broadcastPlayback();
       }
       break;
     case 'stop':
+      if (blockedByHost()) break;
       if (state.player && state.player.isPlaying) {
         state.player.pause();
         updatePlayPauseIcon(false);
+        broadcastPlayback();
       }
       break;
     case 'hideChords':
@@ -1702,6 +1766,10 @@ function syncScrollToLine(lineIdx) {
 }
 
 function handleScroll() {
+  // Host parado rolando a cifra: a banda acompanha a posição
+  if (state.player && !state.player.isPlaying && state.sync && state.sync.role === 'host') {
+    debouncedScrollBroadcast();
+  }
   // Sincroniza player se usuário scrollou manualmente
   if (state.player && state.player.isPlaying) {
     const progress = els.showScrollContainer.scrollTop / (els.showScrollContainer.scrollHeight - els.showScrollContainer.clientHeight);
@@ -1710,6 +1778,7 @@ function handleScroll() {
 }
 
 function handlePrevSong() {
+  if (blockedByHost()) return;
   const song = setlist.prev();
   if (song) {
     loadCurrentSong();
@@ -1720,11 +1789,13 @@ function handlePrevSong() {
       updatePlayPauseIcon(false);
     }
     state.tapTempo.reset();
+    broadcastPlayback();
     showToast(`Anterior: ${song.metadata.name}`, 'info');
   }
 }
 
 function handleNextSong() {
+  if (blockedByHost()) return;
   const song = setlist.next();
   if (song) {
     loadCurrentSong();
@@ -1736,6 +1807,7 @@ function handleNextSong() {
       updatePlayPauseIcon(false);
     }
     state.tapTempo.reset();
+    broadcastPlayback();
     showToast(`Próxima: ${song.metadata.name}`, 'success');
   } else {
     // Fim do setlist
@@ -1969,6 +2041,299 @@ function showToast(message, type = 'info') {
 }
 
 // ===== Utilidades =====
+// ===== Modo Sync (banda acompanha o host) =====
+// O host publica na sessão o estado de reprodução; os integrantes aplicam.
+// Individual (não sincroniza): cifra/só letra, tamanho da fonte, tabs.
+const SYNC_STORAGE_KEY = 'singfy_sync_v1';
+const SYNC_HEARTBEAT_MS = 5000;   // host reenvia a posição enquanto toca
+const SYNC_SEEK_TOLERANCE_S = 0.3; // integrante corrige se desviar > 0,3 s
+
+// Hash curto (djb2) para detectar mudança na setlist sem guardar o JSON inteiro
+function hashString(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  return String(h >>> 0) + ':' + str.length;
+}
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+const debouncedScrollBroadcast = debounce(() => broadcastPlayback(), 800);
+
+function setSync(sync) {
+  state.sync = sync;
+  try {
+    if (sync) localStorage.setItem(SYNC_STORAGE_KEY, JSON.stringify(sync));
+    else localStorage.removeItem(SYNC_STORAGE_KEY);
+  } catch (_) {}
+  updateSyncBadge();
+}
+
+function saveSync() {
+  if (state.sync) setSync(state.sync);
+}
+
+function clearSync(message) {
+  if (!state.sync) return;
+  setSync(null);
+  if (message) showToast(message, 'info');
+}
+
+// Retoma a sessão salva após recarregar a página
+async function resumeSync() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(SYNC_STORAGE_KEY)); } catch (_) {}
+  const user = getCurrentUser();
+  if (!saved || !saved.sessionId || !user) return;
+  if (!setlist.getPlaylist(saved.playlistId)) { setSync(null); return; }
+  try {
+    const result = await joinSession(saved.sessionId, user.uid);
+    setSync({ ...saved, role: result.isHost ? 'host' : 'guest', lastSeq: 0 });
+    if (!result.isHost && state.sync.following) {
+      state.lastRemotePlayback = result.playback;
+      applyRemotePlayback(result.playback);
+    }
+  } catch (err) {
+    setSync(null); // sessão encerrada ou inexistente
+  }
+}
+
+// Integrante seguindo o host não controla a reprodução
+function isFollowingHost() {
+  return !!(state.sync && state.sync.role === 'guest' && state.sync.following);
+}
+
+function blockedByHost() {
+  if (!isFollowingHost() || state.currentScreen !== 'show') return false;
+  showToast('Modo sync: quem controla é o host', 'info');
+  return true;
+}
+
+function isSessionPlaylistActive() {
+  return !!(state.sync && setlist.getActive()?.id === state.sync.playlistId);
+}
+
+function currentPlayerProgress() {
+  if (state.player) return state.player.getProgress();
+  const c = els.showScrollContainer;
+  if (!c) return 0;
+  const max = c.scrollHeight - c.clientHeight;
+  return max > 0 ? Math.min(1, c.scrollTop / max) : 0;
+}
+
+// ---- Host ----
+function broadcastPlayback() {
+  const sync = state.sync;
+  if (!sync || sync.role !== 'host' || !isSessionPlaylistActive()) return;
+  const inShow = state.currentScreen === 'show';
+  const p = state.player;
+  updateSessionPlayback({
+    active: inShow,
+    songIndex: setlist.getCurrentIndex(),
+    isPlaying: !!(inShow && p && p.isPlaying),
+    progress: inShow && p ? currentPlayerProgress() : 0,
+    speed: p ? p.speed : 1,
+    // Relógio do host: ordena os eventos (sobrevive a recarregar a página)
+    seq: Date.now(),
+    sentAt: Date.now()
+  });
+}
+
+function syncHeartbeat() {
+  if (state.sync && state.sync.role === 'host' && state.currentScreen === 'show' &&
+      state.player && state.player.isPlaying) {
+    broadcastPlayback();
+  }
+}
+
+// Host alterou a setlist da sessão (músicas, ordem, tom) -> envia à banda
+function pushSessionSetlistIfChanged() {
+  const sync = state.sync;
+  if (!sync || sync.role !== 'host' || !isSessionPlaylistActive()) return;
+  const data = setlist.exportForShare();
+  const json = JSON.stringify(data);
+  const hash = hashString(json);
+  if (hash === sync.setlistHash) return;
+  if (json.length > 900 * 1024) {
+    showToast('Setlist grande demais para sincronizar com a banda', 'warning');
+    return;
+  }
+  sync.setlistHash = hash;
+  saveSync();
+  updateSessionSetlist(data);
+}
+
+async function endSyncSession() {
+  const user = getCurrentUser();
+  const isHost = !!(state.sync && state.sync.role === 'host');
+  try {
+    if (isHost) await endSession(user && user.uid);
+    else await leaveSession(user && user.uid);
+  } catch (err) {
+    console.warn('Erro ao sair da sessão:', err);
+  }
+  setSync(null);
+  showToast(isHost ? 'Sessão encerrada' : 'Você saiu da sessão', 'info');
+}
+
+// ---- Atualizações da sessão (host e integrantes) ----
+function handleSessionUpdate(data) {
+  const sync = state.sync;
+  if (!sync) return;
+  if (!data) return; // saída local; clearSync já foi chamado
+  if (data.ended || data.isActive === false) {
+    clearSync(sync.role === 'guest' ? 'O host encerrou a sessão' : null);
+    return;
+  }
+  sync.participants = (data.participants || []).length;
+  updateSyncBadge();
+  if (sync.role !== 'guest') return;
+  state.lastRemotePlayback = data.playback || null; // para retomar ao voltar a acompanhar
+
+  applyRemoteSetlist(data.setlist);
+  if (sync.following) applyRemotePlayback(data.playback);
+}
+
+function applyRemoteSetlist(remote) {
+  const sync = state.sync;
+  if (!remote) return;
+  const hash = hashString(typeof remote === 'string' ? remote : JSON.stringify(remote));
+  if (hash === sync.setlistHash) return;
+  let data = remote;
+  if (typeof data === 'string') {
+    try { data = JSON.parse(data); } catch (_) { return; }
+  }
+  sync.setlistHash = hash;
+  saveSync();
+  if (!setlist.replaceSongs(sync.playlistId, data)) return;
+
+  if (state.currentScreen === 'show' && isSessionPlaylistActive()) {
+    // Recarrega a música atual (ex.: host mudou o tom) sem perder a posição
+    const progress = currentPlayerProgress();
+    const wasPlaying = state.player && state.player.isPlaying;
+    loadCurrentSong();
+    if (state.player) {
+      state.player.updateMaxScroll();
+      state.player.seek(progress);
+      if (wasPlaying && !state.player.isPlaying) state.player.start();
+    }
+  } else if (state.currentScreen === 'setlist') {
+    renderSetlist();
+  }
+  updateSetlistBadge();
+}
+
+function applyRemotePlayback(pb) {
+  const sync = state.sync;
+  if (!pb || !pb.seq || pb.seq <= (sync.lastSeq || 0)) return;
+  sync.lastSeq = pb.seq;
+
+  if (!pb.active) {
+    // Host saiu do modo show: pausa quem está acompanhando
+    if (state.currentScreen === 'show' && state.player && state.player.isPlaying) {
+      state.player.pause();
+      updatePlayPauseIcon(false);
+    }
+    return;
+  }
+
+  // Garante a setlist da sessão ativa e o modo show aberto
+  if (!isSessionPlaylistActive()) {
+    if (!setlist.getPlaylist(sync.playlistId)) return;
+    setlist.setActive(sync.playlistId);
+  }
+  const songCount = setlist.getAll().length;
+  if (pb.songIndex < 0 || pb.songIndex >= songCount) return;
+
+  if (state.currentScreen !== 'show') {
+    setlist.setCurrent(pb.songIndex);
+    showScreen('show');
+  } else if (pb.songIndex !== setlist.getCurrentIndex()) {
+    setlist.setCurrent(pb.songIndex);
+    loadCurrentSong();
+    if (state.player) {
+      state.player.stop();
+      state.player.setDuration(estimateDurationFromSong(setlist.currentSong()));
+    }
+  }
+  const player = state.player;
+  if (!player) return;
+
+  // Velocidade do host (não salva como preferência da música do integrante)
+  if (typeof pb.speed === 'number' && pb.speed !== player.speed) {
+    player.setSpeed(pb.speed);
+    els.speedValue.textContent = formatSpeed(player.speed);
+  }
+
+  // Posição do host + atraso da mensagem (limitado: relógios podem divergir)
+  let target = pb.progress || 0;
+  if (pb.isPlaying && pb.sentAt) {
+    const lag = Date.now() - pb.sentAt;
+    if (lag > 0 && lag < 3000) target += (lag * player.speed) / (player.duration * 1000);
+  }
+  target = Math.max(0, Math.min(1, target));
+
+  if (pb.isPlaying && !player.isPlaying) {
+    player.start();
+    updatePlayPauseIcon(true);
+    requestWakeLock();
+  } else if (!pb.isPlaying && player.isPlaying) {
+    player.pause();
+    updatePlayPauseIcon(false);
+  }
+  player.updateMaxScroll();
+  const tolerance = SYNC_SEEK_TOLERANCE_S * player.speed / player.duration;
+  if (Math.abs(currentPlayerProgress() - target) > tolerance) {
+    player.seek(target);
+  }
+  updatePlayPauseIcon(player.isPlaying);
+}
+
+// ---- Indicador no modo show ----
+function updateSyncBadge() {
+  const badge = document.getElementById('sync-badge');
+  const sync = state.sync;
+  const following = isFollowingHost();
+  document.body.classList.toggle('sync-guest', following);
+  if (!badge) return;
+  if (!sync) { badge.hidden = true; return; }
+  badge.hidden = false;
+  badge.classList.toggle('paused', sync.role === 'guest' && !sync.following);
+  const n = sync.participants || 1;
+  badge.textContent = sync.role === 'host'
+    ? `SYNC · Host · ${n}`
+    : (sync.following ? 'SYNC · seguindo o host' : 'SYNC pausado');
+}
+
+function handleSyncBadgeClick() {
+  const sync = state.sync;
+  if (!sync) return;
+  if (sync.role === 'host') {
+    showShareModal(getInviteLink(sync.sessionId));
+    return;
+  }
+  if (sync.following) {
+    const choice = confirm('Parar de acompanhar o host?\n\nOK = controlar sozinho (continua na sessão)\nCancelar = continuar acompanhando');
+    if (!choice) return;
+    sync.following = false;
+    saveSync();
+    showToast('Você está controlando sozinho. Toque em "SYNC" para voltar a acompanhar.', 'info');
+  } else {
+    const choice = confirm('Voltar a acompanhar o host?\n\nOK = acompanhar\nCancelar = sair da sessão');
+    if (choice) {
+      sync.following = true;
+      sync.lastSeq = 0;
+      saveSync();
+      applyRemotePlayback(state.lastRemotePlayback); // alcança o host agora
+      showToast('Acompanhando o host', 'success');
+    } else {
+      endSyncSession();
+    }
+  }
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')

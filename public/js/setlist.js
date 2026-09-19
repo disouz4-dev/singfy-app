@@ -101,6 +101,10 @@ export class SetlistManager {
       console.error("Erro ao salvar setlists:", e);
     }
     this.syncToCloud();
+    // Modo sync: o host usa para enviar mudanças da setlist à banda
+    if (typeof this.onChange === 'function') {
+      try { this.onChange(); } catch (_) {}
+    }
   }
 
   syncToCloud() {
@@ -377,6 +381,25 @@ export class SetlistManager {
     };
     // Firestore rejeita campos undefined; o round-trip JSON remove todos
     return JSON.parse(JSON.stringify(data));
+  }
+
+  getPlaylist(id) {
+    return this.playlists.find(p => p.id === id) || null;
+  }
+
+  // Modo sync (integrante): substitui as músicas da setlist da sessão pelas
+  // do host, mantendo a mesma setlist (id) no aparelho.
+  replaceSongs(playlistId, shared) {
+    const pl = this.getPlaylist(playlistId);
+    if (!pl || !shared || !Array.isArray(shared.songs)) return false;
+    pl.name = shared.name || pl.name;
+    pl.songs = shared.songs.map(s => ({ ...s, id: crypto.randomUUID() }));
+    if (pl.currentIndex >= pl.songs.length) pl.currentIndex = pl.songs.length - 1;
+    if (pl.currentIndex < 0 && pl.songs.length > 0) pl.currentIndex = 0;
+    pl.updatedAt = Date.now();
+    this._sanitize();
+    this.save();
+    return true;
   }
 
   exportAll() {
