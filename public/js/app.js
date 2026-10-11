@@ -1689,8 +1689,25 @@ function handleMidiToggle() {
     showToast('MIDI desconectado', 'info');
     return;
   }
+  connectMidi();
+}
+
+async function connectMidi() {
+  // A escolha vem de um toque do usuário: a janela do Bluetooth precisa ser
+  // aberta direto dele (pedir Web MIDI antes invalidava o toque)
+  const transport = await appDialog({
+    title: 'Conectar pedal',
+    message: 'Como o pedal está ligado?',
+    buttons: [
+      { label: 'Cancelar', value: null },
+      { label: 'Cabo (USB)', value: 'webmidi' },
+      { label: 'Bluetooth', value: 'bluetooth', primary: true }
+    ]
+  });
+  if (!transport) return;
+
   state.midi.onDisconnect = handleMidiDisconnect;
-  state.midi.connect()
+  state.midi.connect({ transport })
     .then(async (result) => {
       state.midiConnected = true;
       state.midi.onCommand = handleMidiCommand;
@@ -1712,8 +1729,21 @@ function handleMidiToggle() {
     })
     .catch((err) => {
       state.midi.onDisconnect = null;
-      showToast('Falha ao conectar MIDI: ' + (err && err.message ? err.message : 'erro'), 'error');
+      showToast('Falha ao conectar MIDI: ' + midiErrorText(err), 'error');
+      console.error('[singfy-midi] conexão:', err);
     });
+}
+
+// Mensagens do navegador são técnicas e em inglês; traduz as mais comuns
+function midiErrorText(err) {
+  const name = err && err.name;
+  const msg = (err && err.message) || 'erro';
+  if (/user gesture/i.test(msg)) return 'toque no botão MIDI de novo (o navegador exige um toque direto para abrir o Bluetooth).';
+  if (name === 'NotFoundError') return 'nenhum aparelho escolhido. Ligue o pedal em modo Bluetooth e tente de novo.';
+  if (name === 'SecurityError' || name === 'NotAllowedError') return 'o navegador bloqueou o acesso. Toque no botão de novo e permita quando pedir.';
+  if (name === 'NetworkError') return 'não foi possível conectar. Desligue e ligue o pedal, e tente de novo.';
+  if (name === 'InvalidStateError') return 'o Bluetooth do aparelho está desligado.';
+  return msg;
 }
 
 function handleMidiDisconnect() {
