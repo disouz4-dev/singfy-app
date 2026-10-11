@@ -1771,3 +1771,61 @@ body.sync-guest #btn-tap-tempo {
 .is-busy svg { animation: share-busy 1s ease-in-out infinite; }
 @keyframes share-busy { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .is-busy svg { animation: none; } }
+
+/* ===== Leitura da letra (modo só-letra) =====
+   Antes: fonte monoespaçada (feita para alinhar acordes), letra colada na
+   borda, versos agrupados sob os mesmos acordes saindo emendados e sem
+   respiro entre as estrofes. */
+.show-scroll-container.lyrics-only {
+  padding-left: max(var(--space-6), env(safe-area-inset-left));
+  padding-right: max(var(--space-6), env(safe-area-inset-right));
+}
+.show-scroll-container.lyrics-only .cifra-content {
+  font-family: var(--font-ui);
+  line-height: 1.7;
+  max-width: 34em;
+  letter-spacing: 0.005em;
+}
+/* Cada verso na sua linha (o .nl usava flex-basis, que não vale em bloco) */
+.show-scroll-container.lyrics-only .cifra-line .chunk.nl { display: block; }
+/* Sem acordes, os espaços que posicionavam os acordes só deixam a margem
+   esquerda irregular — colapsa como texto normal */
+.show-scroll-container.lyrics-only .cifra-line .chunk .txt,
+.show-scroll-container.lyrics-only .cifra-line.classic-text {
+  white-space: normal;
+}
+/* Respiro entre os blocos de letra */
+.show-scroll-container.lyrics-only .cifra-line { margin-bottom: 0.7em; }
+.show-scroll-container.lyrics-only .cifra-line:empty { margin-bottom: 0.2em; }
+
+/* O modo show define as cores escuras, mas o fundo vinha do <html> — em
+   celular no tema claro o palco ficava branco. */
+body.show-mode {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* ===== Modo noturno (palco escuro): âmbar sobre preto, sem luz azul =====
+   O modo show é claro por padrão (regras com !important mais acima), então
+   o noturno precisa sobrepor com a mesma força. */
+body.show-mode.night {
+  --bg: #000000 !important;
+  --bg-elevated: #0b0905 !important;
+  --bg-card: #141009 !important;
+  --border: #3a2b16 !important;
+  --border-light: #4a381d !important;
+  --fg: #ffd8a1 !important;
+  --fg-muted: #c89d66 !important;
+  --fg-subtle: #8c6c45 !important;
+  --accent: #ffb454 !important;
+  --accent-dim: #e09a3c !important;
+  --accent-bg: rgba(255, 180, 84, 0.16) !important;
+}
+body.show-mode.night #app,
+body.show-mode.night .show-scroll-container { background: #000 !important; }
+body.show-mode.night .cifra-line .chord {
+  color: #ffd27a;
+  background: rgba(255, 180, 84, 0.16);
+}
+body.show-mode.night .cifra-content { color: var(--fg); }
+#show-night.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }

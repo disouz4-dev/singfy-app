@@ -27,6 +27,7 @@ const state = {
   cifraSize: loadPref('cifraSize', 18),   // tamanho da fonte da cifra (px)
   hideTabs: loadPref('hideTabs', true),    // tab ocultada por padrão
   lyricsOnly: false,                       // mostrar apenas a letra (sem acordes)
+  nightMode: loadPref('nightMode', false), // cores quentes (âmbar) no modo show
   savedSpeed: 1.0,                         // cache do último tempo (speed) da música atual
   voiceSync: null,                          // sincronização por voz (Web Speech API)
   midi: new MidiController(),               // controlador MIDI "chocolate"
@@ -301,6 +302,8 @@ function bindEvents() {
   if (els.fontUp) els.fontUp.addEventListener('click', () => adjustFontSize(1));
   if (els.showHideTabs) els.showHideTabs.addEventListener('click', toggleHideTabs);
   if (els.showToggleLetra) els.showToggleLetra.addEventListener('click', toggleLyricsOnly);
+  const btnNight = document.getElementById('show-night');
+  if (btnNight) btnNight.addEventListener('click', toggleNightMode);
   if (els.tomDec) els.tomDec.addEventListener('click', () => applyTranspose(state.currentTransposeSemitones - 1));
   if (els.tomInc) els.tomInc.addEventListener('click', () => applyTranspose(state.currentTransposeSemitones + 1));
   if (els.tomNote) els.tomNote.addEventListener('click', cycleTom);
@@ -1800,6 +1803,14 @@ function adjustFontSize(delta) {
   applyCifraPrefs();
 }
 
+function toggleNightMode() {
+  state.nightMode = !state.nightMode;
+  savePref('nightMode', state.nightMode);
+  applyCifraPrefs();
+  if (state.player) state.player.updateMaxScroll();
+  showToast(state.nightMode ? 'Modo noturno ligado' : 'Modo noturno desligado', 'info');
+}
+
 function toggleHideTabs() {
   state.hideTabs = !state.hideTabs;
   savePref('hideTabs', state.hideTabs);
@@ -1812,6 +1823,12 @@ function applyCifraPrefs() {
     els.showScrollContainer.style.setProperty('--cifra-size', state.cifraSize + 'px');
     els.showScrollContainer.classList.toggle('hide-tabs', state.hideTabs);
     els.showScrollContainer.classList.toggle('lyrics-only', state.lyricsOnly);
+  }
+  document.body.classList.toggle('night', state.nightMode);
+  const btnNight = document.getElementById('show-night');
+  if (btnNight) {
+    btnNight.classList.toggle('active', state.nightMode);
+    btnNight.setAttribute('aria-pressed', String(state.nightMode));
   }
   if (els.fontValue) els.fontValue.textContent = String(state.cifraSize);
   if (els.showHideTabs) {
