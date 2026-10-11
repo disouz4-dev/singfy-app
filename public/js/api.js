@@ -62,21 +62,41 @@ export async function searchCifraClub(artist, song) {
   return null;
 }
 
+// O Jina Reader é gratuito e limita requisições por minuto. Numa playlist
+// grande, as que caem no limite sumiam ("31 viraram 27"). Espaça os pedidos e
+// espera progressivamente quando é bloqueado, em vez de desistir.
+const READER_MIN_GAP_MS = 1100;
+let readerQueue = Promise.resolve();
+let lastReaderAt = 0;
+
+function readerFetch(url) {
+  const run = async () => {
+    const wait = READER_MIN_GAP_MS - (Date.now() - lastReaderAt);
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    lastReaderAt = Date.now();
+    return fetch(url, { headers: { "Accept": "text/html, */*", "X-Return-Format": "html" } });
+  };
+  // Em série: dois pedidos simultâneos furam o espaçamento
+  readerQueue = readerQueue.then(run, run);
+  return readerQueue;
+}
+
+function isRateLimit(status) {
+  return status === 429 || status === 451 || status === 503 || status === 502;
+}
+
 export async function fetchSong(artist, song, options = {}) {
   const cifraUrl = `https://www.cifraclub.com.br/${slug(artist)}/${slug(song)}/`;
   const readerUrl = `${READER_BASE}${cifraUrl}`;
 
-  const maxAttempts = 3;
+  const maxAttempts = 5;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const res = await fetch(readerUrl, {
-        headers: {
-          "Accept": "text/html, */*",
-          "X-Return-Format": "html"
-        }
-      });
+      const res = await readerFetch(readerUrl);
       if (!res.ok) {
-        throw new Error(`Erro ${res.status} ao acessar a cifra.`);
+        const err = new Error(`Erro ${res.status} ao acessar a cifra.`);
+        err.rateLimited = isRateLimit(res.status);
+        throw err;
       }
       const text = await res.text();
       if (!text || /error code: 522|title: 522/i.test(text)) {
@@ -95,7 +115,9 @@ export async function fetchSong(artist, song, options = {}) {
       return fetchViaSearch(artist, song, options, "A cifra não pôde ser extraída da página.");
     } catch (err) {
       if (attempt < maxAttempts) {
-        await new Promise(r => setTimeout(r, 600 * attempt));
+        // Bloqueio por excesso de pedidos pede espera bem maior
+        const delay = err && err.rateLimited ? 2500 * attempt : 600 * attempt;
+        await new Promise(r => setTimeout(r, delay));
         continue;
       }
       console.warn("Falha ao buscar cifra:", err);
