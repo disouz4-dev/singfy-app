@@ -1697,11 +1697,11 @@ async function connectMidi() {
   // aberta direto dele (pedir Web MIDI antes invalidava o toque)
   const transport = await appDialog({
     title: 'Conectar pedal',
-    message: 'Como o pedal está ligado?',
+    message: 'Se o pedal já está pareado nas configurações do celular, use "Já pareado". Para parear agora, use "Parear Bluetooth" — nesse caso, o pedal não pode estar conectado em nenhum outro app.',
     buttons: [
       { label: 'Cancelar', value: null },
-      { label: 'Cabo (USB)', value: 'webmidi' },
-      { label: 'Bluetooth', value: 'bluetooth', primary: true }
+      { label: 'Já pareado / cabo', value: 'webmidi' },
+      { label: 'Parear Bluetooth', value: 'bluetooth', primary: true }
     ]
   });
   if (!transport) return;
@@ -1741,7 +1741,7 @@ function midiErrorText(err) {
   if (/user gesture/i.test(msg)) return 'toque no botão MIDI de novo (o navegador exige um toque direto para abrir o Bluetooth).';
   if (name === 'NotFoundError') return 'nenhum aparelho escolhido. Ligue o pedal em modo Bluetooth e tente de novo.';
   if (name === 'SecurityError' || name === 'NotAllowedError') return 'o navegador bloqueou o acesso. Toque no botão de novo e permita quando pedir.';
-  if (name === 'NetworkError') return 'não foi possível conectar. Desligue e ligue o pedal, e tente de novo.';
+  if (name === 'NetworkError') return 'não foi possível conectar — o pedal costuma estar ocupado com outro app ou pareado no sistema. Desligue e ligue o pedal, e remova o pareamento em Configurações > Bluetooth.';
   if (name === 'InvalidStateError') return 'o Bluetooth do aparelho está desligado.';
   return msg;
 }

@@ -186,7 +186,7 @@ export class MidiController {
       if (!this.availableWebMidi) throw new Error('Este navegador não suporta MIDI por cabo.');
       const access = await navigator.requestMIDIAccess();
       const inputs = this.collectInputs(access);
-      if (inputs.length === 0) throw new Error('Nenhum pedal por cabo encontrado. Confira o cabo/adaptador OTG.');
+      if (inputs.length === 0) throw new Error('Nenhuma entrada MIDI encontrada. Se for Bluetooth, pareie o pedal nas configurações do celular (ou use "Parear Bluetooth"); se for cabo, confira o adaptador OTG.');
       this.access = access;
       this.connected = true;
       this.transport = 'webmidi';
@@ -267,7 +267,7 @@ export class MidiController {
       server = await device.gatt.connect();
     } catch (err) {
       await this.forgetCurrentDevice();
-      throw new Error(`Não foi possível conectar em "${device.name || 'dispositivo'}". Talvez ele já esteja conectado em outro app — desconecte e tente de novo.`);
+      throw new Error(`Não foi possível conectar em "${device.name || 'dispositivo'}". Ele costuma estar ocupado: remova o pareamento em Configurações > Bluetooth, desligue e ligue o pedal, e feche outros apps de MIDI.`);
     }
 
     let service;
