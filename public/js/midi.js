@@ -165,8 +165,34 @@ export class MidiController {
 
   // Conecta. Tenta Web MIDI primeiro; se não houver entradas, cai no
   // BLE-MIDI via Web Bluetooth (pede ao usuário escolher o dispositivo).
-  async connect() {
+  // transport: 'bluetooth' | 'webmidi' | undefined (tenta cabo e depois BT).
+  // Escolher importa: pedir acesso Web MIDI antes gasta o "toque do usuário"
+  // e o Chrome do Android recusa abrir a janela de Bluetooth depois disso.
+  async connect({ transport } = {}) {
     this.disconnect();
+
+    if (transport === 'bluetooth') {
+      if (!this.availableBluetooth) {
+        throw new Error('Este navegador não suporta Bluetooth (no iPhone, o Safari não tem Web Bluetooth).');
+      }
+      const device = await this.connectBluetooth();
+      this.bleDevice = device;
+      this.connected = true;
+      this.transport = 'bluetooth';
+      return { transport: 'bluetooth', device: device.name || 'Dispositivo MIDI' };
+    }
+
+    if (transport === 'webmidi') {
+      if (!this.availableWebMidi) throw new Error('Este navegador não suporta MIDI por cabo.');
+      const access = await navigator.requestMIDIAccess();
+      const inputs = this.collectInputs(access);
+      if (inputs.length === 0) throw new Error('Nenhum pedal por cabo encontrado. Confira o cabo/adaptador OTG.');
+      this.access = access;
+      this.connected = true;
+      this.transport = 'webmidi';
+      this.bindInputs();
+      return { transport: 'webmidi', inputs };
+    }
 
     if (this.availableWebMidi) {
       try {
