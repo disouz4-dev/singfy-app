@@ -7,7 +7,7 @@ import { setlist, SetlistManager } from './setlist.js';
 import { AutoRollPlayer, estimateDuration, TapTempo, SPEED_STEP, clampSpeed } from './player.js?v=20260919';
 import { fetchSong, toSlug, isValidSlug, isCifraLink, fetchSpotifyPlaylistTracks, extractSpotifyPlaylistId, spotifyTitleCandidates } from './api.js?v=20260918';
 import { initAuth, signInWithGoogle, signOutUser, onAuthChange, getCurrentUser, isAuthenticated, setPostLoginHandler, onSetlistReady, registerWithEmail, loginWithEmail, resetPassword, setDisplayName, createPasswordForAccount } from './auth.js?v=20260905';
-import { createSession, getInviteLink, checkUrlForSession, onSessionChange, joinSession, updateSessionPlayback, updateSessionSetlist, endSession, leaveSession } from './session.js';
+import { createSession, getInviteLink, checkUrlForSession, onSessionChange, joinSession, updateSessionPlayback, updateSessionSetlist, endSession, leaveSession, takeHostControl } from './session.js';
 import { VoiceSync } from './voicesync.js?v=20260224';
 import { MidiController } from './midi.js?v=20260918';
 
@@ -2308,6 +2308,20 @@ function handleSessionUpdate(data) {
     clearSync(sync.role === 'guest' ? 'O host encerrou a sessão' : null);
     return;
   }
+  // O papel vem do documento: se alguém assumiu o controle, este aparelho
+  // vira integrante na hora (e vice-versa). Antes o papel ficava gravado no
+  // aparelho e os dois lados podiam discordar de quem era o host.
+  const me = getCurrentUser();
+  const amHost = !!(me && data.hostId === me.uid);
+  const role = amHost ? 'host' : 'guest';
+  if (role !== sync.role) {
+    sync.role = role;
+    sync.following = true;
+    sync.lastSeq = 0;
+    saveSync();
+    showToast(amHost ? 'Você agora controla a sessão' : 'Outro aparelho assumiu o controle', 'info');
+    if (amHost) broadcastPlayback();
+  }
   sync.participants = (data.participants || []).length;
   updateSyncBadge();
   // Contagem ao vivo na janela de compartilhar (o host vê quem entrou)
@@ -2414,6 +2428,25 @@ function applyRemotePlayback(pb) {
   updatePlayPauseIcon(player.isPlaying);
 }
 
+// Qualquer um na sessão pode puxar o comando para si (quem monta a setlist
+// nem sempre é quem criou a sessão)
+async function takeSessionControl() {
+  const user = getCurrentUser();
+  if (!user || !state.sync) return;
+  try {
+    await takeHostControl(user.uid);
+    state.sync.role = 'host';
+    state.sync.following = true;
+    saveSync();
+    updateSyncBadge();
+    broadcastPlayback();
+    showToast('Você assumiu o controle da sessão', 'success');
+  } catch (err) {
+    console.error('Erro ao assumir o controle:', err);
+    showToast('Não foi possível assumir o controle', 'error');
+  }
+}
+
 // ---- Indicador no modo show ----
 function updateSyncBadge() {
   const badge = document.getElementById('sync-badge');
@@ -2426,8 +2459,11 @@ function updateSyncBadge() {
   badge.classList.toggle('paused', sync.role === 'guest' && !sync.following);
   const n = sync.participants || 1;
   badge.textContent = sync.role === 'host'
-    ? `SYNC · Host · ${n}`
+    ? `SYNC · você comanda · ${n}`
     : (sync.following ? 'SYNC · seguindo o host' : 'SYNC pausado');
+  badge.title = sync.role === 'host'
+    ? 'Você controla a sessão. Toque para ver o link ou encerrar.'
+    : 'Outro aparelho controla. Toque para assumir o controle ou sair.';
 }
 
 async function handleSyncBadgeClick() {
@@ -2439,24 +2475,29 @@ async function handleSyncBadgeClick() {
   }
   if (sync.following) {
     const choice = await appDialog({
-      title: 'Parar de acompanhar o host?',
-      message: 'Você continua na sessão, mas controla a rolagem sozinho.',
+      title: 'Modo sync',
+      message: 'Este aparelho está acompanhando o host.',
       buttons: [
-        { label: 'Continuar acompanhando', value: false },
-        { label: 'Controlar sozinho', value: true, primary: true }
+        { label: 'Cancelar', value: null },
+        { label: 'Controlar sozinho', value: 'solo' },
+        { label: 'Assumir o controle', value: 'take', primary: true }
       ]
     });
-    if (!choice) return;
+    if (choice === 'take') {
+      await takeSessionControl();
+      return;
+    }
+    if (choice !== 'solo') return;
     sync.following = false;
     saveSync();
     showToast('Você está controlando sozinho. Toque em "SYNC" para voltar a acompanhar.', 'info');
   } else {
     const choice = await appDialog({
       title: 'Modo sync pausado',
-      message: 'Voltar a acompanhar o host ou sair da sessão?',
+      message: 'Voltar a acompanhar o host, assumir o controle da banda ou sair?',
       buttons: [
         { label: 'Sair da sessão', value: 'leave', danger: true },
-        { label: 'Cancelar', value: null },
+        { label: 'Assumir o controle', value: 'take' },
         { label: 'Acompanhar', value: 'follow', primary: true }
       ]
     });
@@ -2466,6 +2507,8 @@ async function handleSyncBadgeClick() {
       saveSync();
       applyRemotePlayback(state.lastRemotePlayback); // alcança o host agora
       showToast('Acompanhando o host', 'success');
+    } else if (choice === 'take') {
+      await takeSessionControl();
     } else if (choice === 'leave') {
       endSyncSession();
     }

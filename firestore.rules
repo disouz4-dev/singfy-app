@@ -21,6 +21,11 @@ service cloud.firestore {
       allow update: if request.auth != null && (
         (request.auth.uid == resource.data.hostId &&
          request.resource.data.hostId == resource.data.hostId) ||
+        // Participante assume o controle (passa a ser o host)
+        (request.auth.uid in resource.data.participants &&
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['hostId', 'updatedAt']) &&
+         request.resource.data.hostId == request.auth.uid) ||
         (request.resource.data.diff(resource.data).affectedKeys()
            .hasOnly(['participants', 'updatedAt']) &&
          (request.resource.data.participants.toSet() ==
