@@ -1829,3 +1829,20 @@ body.show-mode.night .cifra-line .chord {
 }
 body.show-mode.night .cifra-content { color: var(--fg); }
 #show-night.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+
+/* Marcações de seção ([Refrão], [Solo]) em qualquer linha, com o mesmo
+   destaque das seções que já ficavam em linha própria */
+.cifra-line .section-tag {
+  display: inline-block;
+  color: var(--accent);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: calc(var(--cifra-size, 18px) * 0.8);
+  margin-top: 0.6em;
+}
+.show-scroll-container.lyrics-only .cifra-line .section-tag {
+  display: block;
+  margin-top: 1em;
+  margin-bottom: 0.2em;
+}
