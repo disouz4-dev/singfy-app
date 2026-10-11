@@ -148,6 +148,10 @@ export class MidiController {
     this.onDisconnect = null; // () => void (quando BT cair ou usuário desconectar)
     this.onMidiPacket = null; // (u8, messages, label) => void — diagnóstico BT
     this.onUnmapped = null;   // (key, bytes) => void — chegou, mas sem comando
+    this.onReconnect = null;  // () => void — voltou sozinho depois de uma queda
+    this.autoReconnect = true;
+    this._reconnectTimer = null;
+    this._reconnectTries = 0;
     this.learnHandler = null; // (key, bytes) => void — modo "mapear pedal"
     this.userMap = loadUserMap();
     this._bleSubscriptions = [];
@@ -170,6 +174,7 @@ export class MidiController {
   // e o Chrome do Android recusa abrir a janela de Bluetooth depois disso.
   async connect({ transport } = {}) {
     this.disconnect();
+    this.autoReconnect = true;
 
     if (transport === 'bluetooth') {
       if (!this.availableBluetooth) {
@@ -270,14 +275,27 @@ export class MidiController {
       throw new Error(`Não foi possível conectar em "${device.name || 'dispositivo'}". Ele costuma estar ocupado: remova o pareamento em Configurações > Bluetooth, desligue e ligue o pedal, e feche outros apps de MIDI.`);
     }
 
+    try {
+      await this.setupBleServices(server, device);
+    } catch (err) {
+      await this.forgetCurrentDevice();
+      throw err;
+    }
+
+    return device;
+  }
+
+  // Assina os canais de dados do dispositivo (usado ao conectar e ao
+  // reconectar sozinho depois de uma queda)
+  async setupBleServices(server, device) {
     let service;
     try {
       service = await server.getPrimaryService(BLE_MIDI_SERVICE);
     } catch (_) {
-      await this.forgetCurrentDevice();
-      throw new Error(`O dispositivo "${device.name || 'desconhecido'}" não expõe o serviço MIDI via Bluetooth. Pode ser que o controlador seja apenas USB (sem Bluetooth).`);
+      throw new Error(`O dispositivo "${(device && device.name) || 'desconhecido'}" não expõe o serviço MIDI via Bluetooth. Pode ser que o controlador seja apenas USB (sem Bluetooth).`);
     }
 
+    this._bleSubscriptions = [];
     const characteristic = await service.getCharacteristic(BLE_MIDI_CHAR);
     this.bleChar = characteristic;
     await this.subscribeBleChar(characteristic, 'midi');
@@ -405,8 +423,39 @@ export class MidiController {
     const was = this.connected;
     this.connected = false;
     this.bleChar = null;
-    this.bleDevice = null;
-    if (was && typeof this.onDisconnect === 'function') this.onDisconnect('bluetooth');
+    this._bleSubscriptions = [];
+    // Mantém a referência do aparelho: dá para reconectar sem pedir
+    // permissão de novo (o usuário já escolheu este pedal)
+    const device = this.bleDevice;
+    if (was && typeof this.onDisconnect === 'function') {
+      this.onDisconnect('bluetooth', { reconnecting: !!(device && this.autoReconnect) });
+    }
+    if (device && this.autoReconnect) this.scheduleBleReconnect();
+    else this.bleDevice = null;
+  }
+
+  // Volta sozinho quando a conexão cai (pedal longe, tela bloqueada, etc.).
+  // Tenta por ~2 minutos, espaçando as tentativas.
+  scheduleBleReconnect() {
+    if (!this.autoReconnect || !this.bleDevice || this._reconnectTimer) return;
+    const delay = Math.min(1000 * Math.pow(2, this._reconnectTries), 15000);
+    this._reconnectTries++;
+    this._reconnectTimer = setTimeout(async () => {
+      this._reconnectTimer = null;
+      const device = this.bleDevice;
+      if (!device || !this.autoReconnect) return;
+      try {
+        const server = await device.gatt.connect();
+        await this.setupBleServices(server, device);
+        this.connected = true;
+        this.transport = 'bluetooth';
+        this._reconnectTries = 0;
+        if (typeof this.onReconnect === 'function') this.onReconnect(device.name || 'pedal');
+      } catch (err) {
+        if (this._reconnectTries < 10) this.scheduleBleReconnect();
+        else { this.bleDevice = null; this._reconnectTries = 0; }
+      }
+    }, delay);
   }
 
   handleMessage(e) {
@@ -494,6 +543,11 @@ export class MidiController {
   }
 
   disconnect() {
+    // Desconexão pedida pelo usuário: não tenta voltar sozinho
+    this.autoReconnect = false;
+    clearTimeout(this._reconnectTimer);
+    this._reconnectTimer = null;
+    this._reconnectTries = 0;
     if (this.access) {
       this.access.inputs.forEach((inp) => {
         inp._singfyBound = false;

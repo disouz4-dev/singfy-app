@@ -1713,6 +1713,7 @@ async function connectMidi() {
       state.midi.onCommand = handleMidiCommand;
       state.midi.onMidiPacket = handleMidiPacket;
       state.midi.onUnmapped = handleMidiUnmapped;
+      state.midi.onReconnect = handleMidiReconnect;
       if (els.btnMidi) {
         els.btnMidi.classList.add('active');
         els.btnMidi.setAttribute('aria-pressed', 'true');
@@ -1746,14 +1747,33 @@ function midiErrorText(err) {
   return msg;
 }
 
-function handleMidiDisconnect() {
+function handleMidiDisconnect(_transport, info) {
   state.midiConnected = false;
-  hideMidiDebug();
   if (els.btnMidi) {
     els.btnMidi.classList.remove('active');
     els.btnMidi.setAttribute('aria-pressed', 'false');
   }
-  showToast('Controle MIDI desconectado (Bluetooth caiu)', 'warning');
+  if (info && info.reconnecting) {
+    // Volta sozinho: não precisa reconectar na mão no meio do show
+    els.btnMidi && els.btnMidi.classList.add('is-busy');
+    showToast('Pedal caiu — reconectando sozinho...', 'warning');
+    const dbg = document.getElementById('midi-debug');
+    if (dbg) { dbg.hidden = false; dbg.textContent = 'Pedal desconectado — tentando reconectar...'; }
+  } else {
+    hideMidiDebug();
+    showToast('Controle MIDI desconectado (Bluetooth caiu)', 'warning');
+  }
+}
+
+function handleMidiReconnect(name) {
+  state.midiConnected = true;
+  if (els.btnMidi) {
+    els.btnMidi.classList.remove('is-busy');
+    els.btnMidi.classList.add('active');
+    els.btnMidi.setAttribute('aria-pressed', 'true');
+  }
+  hideMidiDebug();
+  showToast(`Pedal reconectado (${name})`, 'success');
 }
 
 function fmtHex(u8) {
