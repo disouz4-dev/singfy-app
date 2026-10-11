@@ -120,6 +120,18 @@ export async function joinSession(sessionId, userId) {
   return { sessionId, isHost, setlist: data.setlist, playback: data.playback || null };
 }
 
+// Assume o controle da sessão (qualquer participante). Quem era host passa
+// a acompanhar — o papel de cada aparelho vem do campo hostId.
+export async function takeHostControl(userId) {
+  if (!currentSessionId || !ensureDb()) return false;
+  await updateDoc(doc(db, 'sessions', currentSessionId), {
+    hostId: userId,
+    updatedAt: serverTimestamp()
+  });
+  isHost = true;
+  return true;
+}
+
 // Sai da sessão
 export async function leaveSession(userId) {
   if (!currentSessionId || !db) return;
@@ -202,6 +214,11 @@ function watchSession(sessionId) {
     }
     
     const data = snap.data();
+    // Quem é host vem SEMPRE do documento (alguém pode ter assumido o controle)
+    try {
+      const u = getAuth().currentUser;
+      if (u) isHost = data.hostId === u.uid;
+    } catch (_) {}
     notifyListeners({
       sessionId,
       setlist: data.setlist,
