@@ -9,7 +9,7 @@ import { fetchSong, toSlug, isValidSlug, isCifraLink, fetchSpotifyPlaylistTracks
 import { initAuth, signInWithGoogle, signOutUser, onAuthChange, getCurrentUser, isAuthenticated, setPostLoginHandler, onSetlistReady, registerWithEmail, loginWithEmail, resetPassword, setDisplayName, createPasswordForAccount } from './auth.js?v=20260905';
 import { createSession, getInviteLink, checkUrlForSession, onSessionChange, joinSession, updateSessionPlayback, updateSessionSetlist, endSession, leaveSession, takeHostControl } from './session.js';
 import { VoiceSync } from './voicesync.js?v=20260224';
-import { MidiController } from './midi.js?v=20260918';
+import { MidiController, loadUserMap, clearUserMap } from './midi.js?v=20261011';
 
 // ===== Versão do App =====
 const APP_VERSION = 'v1.5.1';
@@ -294,6 +294,8 @@ function bindEvents() {
   if (els.speedUp) els.speedUp.addEventListener('click', () => adjustSpeed(SPEED_STEP));
   if (els.btnTapTempo) els.btnTapTempo.addEventListener('click', handleTapTempo);
   if (els.btnMidi) els.btnMidi.addEventListener('click', handleMidiToggle);
+  const btnMidiLearn = document.getElementById('btn-midi-learn');
+  if (btnMidiLearn) btnMidiLearn.addEventListener('click', runMidiLearn);
   const btnLogout = document.getElementById('btn-logout');
   if (btnLogout) btnLogout.addEventListener('click', handleLogout);
   const syncBadge = document.getElementById('sync-badge');
@@ -1693,6 +1695,7 @@ function handleMidiToggle() {
       state.midiConnected = true;
       state.midi.onCommand = handleMidiCommand;
       state.midi.onMidiPacket = handleMidiPacket;
+      state.midi.onUnmapped = handleMidiUnmapped;
       if (els.btnMidi) {
         els.btnMidi.classList.add('active');
         els.btnMidi.setAttribute('aria-pressed', 'true');
@@ -1755,6 +1758,81 @@ function handleMidiPacket(u8, messages, label) {
 function hideMidiDebug() {
   const dbg = document.getElementById('midi-debug');
   if (dbg) dbg.hidden = true;
+}
+
+// Chegou mensagem do pedal, mas nenhum comando corresponde: avisa (no máximo
+// a cada 8 s) e oferece o mapeamento, em vez de o pedal parecer mudo
+let lastUnmappedAt = 0;
+function handleMidiUnmapped(key) {
+  if (Date.now() - lastUnmappedAt < 8000) return;
+  lastUnmappedAt = Date.now();
+  showToast(`Pedal recebido (${key || 'mensagem'}), mas sem comando. Use "Mapear pedal".`, 'warning');
+}
+
+// Ensina ao app o que cada pedal manda — funciona com qualquer preset
+const MIDI_LEARN_ACTIONS = [
+  { id: 'play', label: 'Tocar (play)' },
+  { id: 'stop', label: 'Pausar' },
+  { id: 'nextSong', label: 'Próxima música' },
+  { id: 'prevSong', label: 'Música anterior' },
+  { id: 'speedUp', label: 'Mais rápido' },
+  { id: 'speedDown', label: 'Mais devagar' },
+  { id: 'hideChords', label: 'Ocultar cifra' },
+  { id: 'showChords', label: 'Mostrar cifra' }
+];
+
+async function runMidiLearn() {
+  if (!state.midiConnected) {
+    showToast('Conecte o pedal primeiro (botão MIDI)', 'warning');
+    return;
+  }
+  const map = { ...loadUserMap() };
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay midi-learn';
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="midi-learn-title">
+      <h3 id="midi-learn-title">Mapear pedal</h3>
+      <p id="midi-learn-step">Pise no pedal que deve: <strong></strong></p>
+      <p class="midi-learn-last" aria-live="polite"></p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="midi-learn-skip">Pular este</button>
+        <button class="btn btn-ghost danger" id="midi-learn-clear">Apagar mapa</button>
+        <button class="btn btn-primary" id="midi-learn-done">Concluir</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const stepEl = overlay.querySelector('#midi-learn-step strong');
+  const lastEl = overlay.querySelector('.midi-learn-last');
+  const waitClick = (id) => new Promise(r => overlay.querySelector(id).addEventListener('click', () => r(id), { once: true }));
+
+  for (const action of MIDI_LEARN_ACTIONS) {
+    stepEl.textContent = action.label;
+    const result = await Promise.race([
+      state.midi.waitForPedal().then(key => ({ key })),
+      waitClick('#midi-learn-skip').then(() => ({ skip: true })),
+      waitClick('#midi-learn-done').then(() => ({ done: true })),
+      waitClick('#midi-learn-clear').then(() => ({ clear: true }))
+    ]);
+    state.midi.cancelLearn();
+    if (result.clear) {
+      clearUserMap();
+      state.midi.setUserMap({});
+      overlay.remove();
+      showToast('Mapa do pedal apagado (volta ao padrão)', 'info');
+      return;
+    }
+    if (result.done) break;
+    if (result.key) {
+      // Um botão só comanda uma ação
+      for (const k of Object.keys(map)) if (k === result.key) delete map[k];
+      map[result.key] = action.id;
+      lastEl.textContent = `${action.label}: ${result.key} ✓`;
+      state.midi.setUserMap(map);
+    }
+  }
+  overlay.remove();
+  const n = Object.keys(map).length;
+  showToast(n ? `Pedal mapeado (${n} botões)` : 'Nenhum botão mapeado', n ? 'success' : 'info');
 }
 
 function handleMidiCommand(command) {
