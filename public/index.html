@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=20261011c">
+  <link rel="stylesheet" href="css/style.css?v=20261011d">
   <link rel="manifest" href="manifest.json">
   <script async src="https://cse.google.com/cse.js?cx=b630d192f3e994907"></script>
 </head>
@@ -398,6 +398,7 @@
         </div>
         <div class="control-group">
           <label class="control-label">MIDI</label>
+          <button id="btn-midi-learn" class="btn btn-ghost" aria-label="Mapear os botões do pedal MIDI" title="Pise em cada pedal para ensinar o app">Mapear pedal</button>
           <button id="btn-midi" class="btn btn-ghost mic-btn" aria-label="Conectar controlador MIDI" aria-pressed="false">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
               <rect x="3" y="4" width="18" height="16" rx="3"/>
@@ -470,6 +471,6 @@
   <script type="module" src="js/session.js"></script>
   <!-- Os demais módulos são importados pelo app.js (carregá-los aqui com outro
        ?v= criava uma 2ª instância de cada um, ex.: dois SetlistManager) -->
-  <script type="module" src="js/app.js?v=20261011"></script>
+  <script type="module" src="js/app.js?v=20261011b"></script>
 </body>
 </html>

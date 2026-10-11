@@ -21,6 +21,34 @@ const COMMANDS = {
   8: 'nextSong'
 };
 
+// Mapeamento aprendido pelo usuário ("mapear pedal"): funciona com qualquer
+// preset/pedal, sem depender do perfil fixo acima.
+const USER_MAP_KEY = 'singfy_midi_map_v1';
+
+export function loadUserMap() {
+  try { return JSON.parse(localStorage.getItem(USER_MAP_KEY)) || {}; } catch (_) { return {}; }
+}
+export function saveUserMap(map) {
+  try { localStorage.setItem(USER_MAP_KEY, JSON.stringify(map || {})); } catch (_) {}
+}
+export function clearUserMap() {
+  try { localStorage.removeItem(USER_MAP_KEY); } catch (_) {}
+}
+
+// Identidade do botão pisado. CC control 0 usa o VALOR (perfil SINCO);
+// os demais CCs usam o número do controle; PC usa o programa; nota usa a nota.
+export function midiKey(bytes) {
+  const type = bytes[0] & 0xf0;
+  if (type === 0xb0) {
+    const control = bytes[1], value = bytes[2] || 0;
+    if (control === 0) return `cc0:${value}`;
+    return value >= 64 ? `cc:${control}` : null; // ignora o "soltar"
+  }
+  if (type === 0xc0) return `pc:${bytes[1]}`;
+  if (type === 0x90) return (bytes[2] || 0) >= 64 ? `note:${bytes[1]}` : null;
+  return null;
+}
+
 // GATT BLE MIDI do padrão MMA
 const BLE_MIDI_SERVICE = '03b80e5a-ede8-4b33-a751-6ce34ec4c700';
 const BLE_MIDI_CHAR = '7772e5db-3868-4112-a1a9-f2669d106bf3';
@@ -119,6 +147,9 @@ export class MidiController {
     this.onCommand = null;  // (command: string, value: number) => void
     this.onDisconnect = null; // () => void (quando BT cair ou usuário desconectar)
     this.onMidiPacket = null; // (u8, messages, label) => void — diagnóstico BT
+    this.onUnmapped = null;   // (key, bytes) => void — chegou, mas sem comando
+    this.learnHandler = null; // (key, bytes) => void — modo "mapear pedal"
+    this.userMap = loadUserMap();
     this._bleSubscriptions = [];
     this._bleSubscribeErrors = [];
   }
@@ -356,18 +387,46 @@ export class MidiController {
     this.processMidiBytes(Array.from(e.data || []));
   }
 
+  setUserMap(map) {
+    this.userMap = map || {};
+    saveUserMap(this.userMap);
+  }
+
   processMidiBytes(bytes) {
     if (!bytes || bytes.length < 2) return;
-    const type = bytes[0] & 0xf0;
-    const command = this.mapMidiToCommand(type, bytes);
+    const key = midiKey(bytes);
+
+    // Modo "mapear pedal": a próxima pisada vira o botão escolhido
+    if (this.learnHandler && key) {
+      const handler = this.learnHandler;
+      this.learnHandler = null;
+      handler(key, bytes);
+      return;
+    }
+
+    // Mapeamento do usuário tem prioridade sobre o perfil fixo
+    const command = (key && this.userMap && this.userMap[key]) ||
+      this.mapMidiToCommand(bytes[0] & 0xf0, bytes);
     if (command && typeof this.onCommand === 'function') {
       this.onCommand(command, bytes);
       return;
     }
-    // Mensagens que não mapeiam para os comandos — loga para diagnóstico
+    // Chegou, mas nenhum comando: avisa a UI (antes só ia para o console e o
+    // pedal parecia mudo)
+    // key null = soltar o pedal/mensagem sem botão: não avisa à toa
+    if (key && typeof this.onUnmapped === 'function') this.onUnmapped(key, bytes);
     if (typeof console !== 'undefined' && console.warn) {
-      console.warn('[singfy-midi] não mapeada:', bytes.map(b => b.toString(16).padStart(2, '0')).join(' '));
+      console.warn('[singfy-midi] não mapeada:', key, bytes.map(b => b.toString(16).padStart(2, '0')).join(' '));
     }
+  }
+
+  // Espera a próxima pisada e devolve a identidade do botão
+  waitForPedal() {
+    return new Promise(resolve => { this.learnHandler = resolve; });
+  }
+
+  cancelLearn() {
+    this.learnHandler = null;
   }
 
   // Tolerante a vários perfis de pedal:

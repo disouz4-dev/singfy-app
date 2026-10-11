@@ -1846,3 +1846,9 @@ body.show-mode.night .cifra-content { color: var(--fg); }
   margin-top: 1em;
   margin-bottom: 0.2em;
 }
+
+/* Mapear pedal MIDI */
+.midi-learn .modal { max-width: 380px; text-align: center; }
+.midi-learn #midi-learn-step strong { color: var(--accent); }
+.midi-learn .midi-learn-last { min-height: 1.4em; color: var(--fg-muted); font-size: var(--fs-sm); }
+.midi-learn .modal-actions { gap: var(--space-2); flex-wrap: wrap; justify-content: center; }
