@@ -7,7 +7,62 @@
 
 const READER_BASE = "https://r.jina.ai/";
 
-export async function fetchSong(artist, song) {
+// Busca oficial do Cifra Club (mesma do site, com CORS liberado). Devolve o
+// endereço exato: adivinhar o slug pelo nome falha com grafias diferentes
+// ("Zé Neto & Cristiano" -> ze-neto-cristiano), participações, acentos etc.
+const norm = (v) => slug(v).replace(/-/g, "");
+
+async function solrSearch(query) {
+  if (!query) return [];
+  const url = `https://solr.sscdn.co/cc/h2/?q=${encodeURIComponent(query)}&alt=json`;
+  try {
+    const res = await fetch(url, { headers: { Accept: "application/json, */*" } });
+    if (!res.ok) return [];
+    const text = await res.text();
+    // Resposta vem embrulhada em parênteses (formato JSONP)
+    const data = JSON.parse(text.replace(/^[^({]*\(/, "").replace(/\);?\s*$/, ""));
+    return (data && data.response && data.response.docs) || [];
+  } catch (err) {
+    console.warn("Busca do Cifra Club falhou:", err);
+    return [];
+  }
+}
+
+export async function searchCifraClub(artist, song) {
+  const cleanTitle = spotifyTitleCandidates(song)[0] || song;
+  // Artista principal: "Anitta, Pedro Sampaio" / "Zé Neto & Cristiano feat. X"
+  const mainArtist = String(artist || "").split(/\s*[,;·]\s*|\s+feat\.?\s+|\s+part\.?\s+/i)[0].trim();
+  // A busca devolve 0 resultados quando a consulta tem lixo ("- Ao Vivo",
+  // dois artistas): tenta da mais específica para a mais simples
+  const queries = [...new Set([
+    [song, artist].filter(Boolean).join(" ").trim(),
+    [cleanTitle, mainArtist].filter(Boolean).join(" ").trim(),
+    [cleanTitle, String(mainArtist).split(/\s+&\s+| e /i)[0]].filter(Boolean).join(" ").trim(),
+    String(cleanTitle || "").trim()
+  ].filter(Boolean))];
+
+  const wantSong = norm(cleanTitle);
+  const wantArtist = norm(mainArtist);
+
+  for (const query of queries) {
+    const docs = await solrSearch(query);
+    let best = null;
+    for (const d of docs) {
+      if (!d || !d.d || !d.u) continue;            // precisa de artista + música
+      const songOk = norm(d.m) === wantSong || norm(d.m).startsWith(wantSong);
+      const artistOk = !!wantArtist && (norm(d.a).includes(wantArtist) || wantArtist.includes(norm(d.a)));
+      const score = (songOk ? 2 : 0) + (artistOk ? 1 : 0);
+      if (!best || score > best.score) best = { score, artistSlug: d.d, songSlug: d.u, name: d.m, artist: d.a };
+      if (score === 3) break;
+    }
+    // Título igual (com ou sem o artista certo) basta; só artista não basta,
+    // senão viria outra música qualquer do artista
+    if (best && best.score >= 2) return best;
+  }
+  return null;
+}
+
+export async function fetchSong(artist, song, options = {}) {
   const cifraUrl = `https://www.cifraclub.com.br/${slug(artist)}/${slug(song)}/`;
   const readerUrl = `${READER_BASE}${cifraUrl}`;
 
@@ -37,17 +92,35 @@ export async function fetchSong(artist, song) {
         await new Promise(r => setTimeout(r, 600 * attempt));
         continue;
       }
-      throw new Error("A cifra não pôde ser extraída da página.");
+      return fetchViaSearch(artist, song, options, "A cifra não pôde ser extraída da página.");
     } catch (err) {
       if (attempt < maxAttempts) {
         await new Promise(r => setTimeout(r, 600 * attempt));
         continue;
       }
       console.warn("Falha ao buscar cifra:", err);
-      throw new Error(`Não foi possível buscar "${artist} - ${song}".\n${err.message}`);
+      return fetchViaSearch(artist, song, options, err.message);
     }
   }
   throw new Error(`Não foi possível buscar "${artist} - ${song}".`);
+}
+
+// Último recurso: pergunta o endereço certo à busca do Cifra Club, em vez de
+// desistir por causa de uma diferença de grafia no slug
+async function fetchViaSearch(artist, song, options, reason) {
+  const fail = () => { throw new Error(`Não foi possível buscar "${artist} - ${song}".\n${reason}`); };
+  if (options.noSearch) fail();
+  const hit = await searchCifraClub(artist, song);
+  if (!hit || (hit.artistSlug === slug(artist) && hit.songSlug === slug(song))) fail();
+  console.info("Cifra encontrada pela busca:", hit.artist, "-", hit.name);
+  const parsed = await fetchSong(hit.artistSlug, hit.songSlug, { ...options, noSearch: true });
+  // Marca quando veio de outro artista (mesmo título), para a UI avisar
+  parsed.searchHit = {
+    artist: hit.artist,
+    name: hit.name,
+    sameArtist: norm(hit.artist).includes(norm(artist)) || norm(artist).includes(norm(hit.artist))
+  };
+  return parsed;
 }
 
 // Busca as faixas (título + artista, em ordem) de uma playlist pública do Spotify.

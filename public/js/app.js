@@ -801,6 +801,7 @@ async function handleSpotifyImport() {
 
   let ok = 0, fail = 0, dup = 0;
   const failedTracks = [];
+  const approxTracks = []; // achadas pela busca, mas de outro artista
   for (let i = 0; i < tracks.length; i++) {
     const t = tracks[i];
     if (els.spotifyProgress) {
@@ -817,6 +818,9 @@ async function handleSpotifyImport() {
         }
       }
       if (!parsed && lastErr) throw lastErr;
+      if (parsed && parsed.searchHit && !parsed.searchHit.sameArtist) {
+        approxTracks.push(`${t.title} (achada como ${parsed.searchHit.artist})`);
+      }
       if (parsed && parsed.lines && parsed.lines.length > 0) {
         const added = addSongToSetlist(parsed);
         if (added) {
@@ -839,8 +843,11 @@ async function handleSpotifyImport() {
   try {
     if (els.spotifyProgress) {
       // Mostra quais não foram encontradas (antes só ia para o console)
-      if (fail > 0) {
-        els.spotifyProgress.textContent = `Não encontradas no Cifra Club (${fail}): ${failedTracks.join(' · ')}`;
+      const partes = [];
+      if (fail > 0) partes.push(`Não encontradas no Cifra Club (${fail}): ${failedTracks.join(' · ')}`);
+      if (approxTracks.length) partes.push(`Confira estas, vieram de outro artista (${approxTracks.length}): ${approxTracks.join(' · ')}`);
+      if (partes.length) {
+        els.spotifyProgress.textContent = partes.join(' | ');
       } else {
         els.spotifyProgress.hidden = true;
       }
