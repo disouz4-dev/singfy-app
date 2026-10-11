@@ -179,6 +179,17 @@ const SECTION_WORDS = [
 ];
 
 // Detecta se um texto representa uma tag de seção (Verso, Refrão, Ponte, etc.).
+// Marca [Refrão], [Solo] etc. como tag de seção em qualquer posição — antes
+// só a linha inteira era destacada, e marcações dentro de um bloco de letra
+// apareciam como texto comum.
+function markupSectionTags(text) {
+  return String(text).split("\n").map(line => {
+    const m = line.match(/^(\s*)(\[[^\]]{1,40}\])(\s*)$/);
+    if (!m) return escapeHtml(line);
+    return `<span class="section-tag">${escapeHtml(m[2])}</span>`;
+  }).join("\n");
+}
+
 export function isSectionLike(text) {
   if (!text) return false;
   const trimmed = String(text).trim();
@@ -187,10 +198,12 @@ export function isSectionLike(text) {
   if (/^\[.*\]$/.test(trimmed)) return true;
   // Termina com ":" e contém palavra-chave (ex.: "Refrão:")
   if (/^.{1,20}:$/.test(trimmed)) {
-    return SECTION_WORDS.some(w => t.includes(w));
+    return SECTION_WORDS.some(w => t.startsWith(w));
   }
-  // Contém palavra-chave de seção
-  return SECTION_WORDS.some(w => t.includes(w));
+  // Linha curta que COMEÇA com palavra de seção (ex.: "Solo", "Refrão 2").
+  // Antes bastava conter a palavra, e versos comuns ("Eu vou solo pela vida",
+  // "Não tem final feliz") viravam seção.
+  return trimmed.length <= 24 && SECTION_WORDS.some(w => t.startsWith(w));
 }
 
 // Formata para exibição clássica (acordes acima da sílaba correspondente).
@@ -206,7 +219,7 @@ export function linesToClassic(lines, transposeMap = {}) {
 
     // Linha só de letra (ou tab): quebra em vez de cortar
     if (chords.length === 0) {
-      return `<div class="cifra-line classic-text${tabClass}">${escapeHtml(textLines.join('\n'))}</div>`;
+      return `<div class="cifra-line classic-text${tabClass}">${markupSectionTags(textLines.join('\n'))}</div>`;
     }
 
     const first = textLines[0] || '';
@@ -243,7 +256,7 @@ export function linesToClassic(lines, transposeMap = {}) {
     for (let i = 1; i < textLines.length; i++) {
       const text = textLines[i];
       if (text.trim() === '') continue;
-      html += `<span class="chunk nl"><span class="txt">${escapeHtml(text)}</span></span>`;
+      html += `<span class="chunk nl"><span class="txt">${markupSectionTags(text)}</span></span>`;
     }
     html += '</div>';
     return html;
