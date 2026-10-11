@@ -2216,26 +2216,32 @@ function handleVisibilityChange() {
 }
 
 // ===== Auto-hide bars no modo show =====
-function setupAutoHideBars() {
-  let hideTimer;
+let autoHideTimer = null;
+let autoHideBound = false;
+
+function showShowBars() {
   const bars = [els.showTopbar, els.showBottombar];
-  
-  function showBars() {
-    bars.forEach(b => b.classList.remove('hidden'));
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => bars.forEach(b => b.classList.add('hidden')), 3000);
+  bars.forEach(b => b && b.classList.remove('hidden'));
+  clearTimeout(autoHideTimer);
+  autoHideTimer = setTimeout(() => bars.forEach(b => b && b.classList.add('hidden')), 3000);
+}
+
+function setupAutoHideBars() {
+  // Só o toque na tela (ou o mouse, no computador) mostra os controles.
+  // Antes a ROLAGEM também mostrava — e cada pisada no pedal rola a cifra,
+  // então as barras apareciam a cada comando do pedal.
+  if (!autoHideBound) {
+    autoHideBound = true;
+    els.showScrollContainer.addEventListener('pointerdown', showShowBars);
+    if (window.matchMedia && window.matchMedia('(pointer: fine)').matches) {
+      els.showScrollContainer.addEventListener('mousemove', showShowBars);
+    }
   }
-  
-  function hideBars() {
-    bars.forEach(b => b.classList.add('hidden'));
-  }
-  
-  els.showScrollContainer.addEventListener('mousemove', showBars);
-  els.showScrollContainer.addEventListener('touchstart', showBars);
-  els.showScrollContainer.addEventListener('scroll', showBars);
-  
   // Inicia escondido após 3s
-  hideTimer = setTimeout(hideBars, 3000);
+  clearTimeout(autoHideTimer);
+  autoHideTimer = setTimeout(() => {
+    [els.showTopbar, els.showBottombar].forEach(b => b && b.classList.add('hidden'));
+  }, 3000);
 }
 
 // ===== Drag & Drop Setlist =====
