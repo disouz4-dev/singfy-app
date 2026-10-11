@@ -787,7 +787,11 @@ body.show-mode #screen-show {
   overflow-y: auto;
   overflow-x: hidden;
   position: relative;
-  padding: calc(var(--space-6) + 60px) var(--space-4) var(--space-20);
+  /* Longhand: max() com env() dentro do atalho "padding" invalida a
+     declaração inteira em alguns navegadores (o espaçamento virava zero) */
+  padding: calc(var(--space-6) + 84px) var(--space-5) calc(var(--space-8) + 80px);
+  padding-left: max(var(--space-5), env(safe-area-inset-left));
+  padding-right: max(var(--space-5), env(safe-area-inset-right));
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
@@ -803,7 +807,7 @@ body.show-mode #screen-show {
   line-height: 1.8;
   max-width: 800px;
   margin: 0 auto;
-  padding-bottom: var(--space-10);
+  padding-bottom: var(--space-8); /* --space-10 não existe */
 }
 
 .cifra-line { margin-bottom: var(--space-1); }
@@ -1777,8 +1781,8 @@ body.sync-guest #btn-tap-tempo {
    borda, versos agrupados sob os mesmos acordes saindo emendados e sem
    respiro entre as estrofes. */
 .show-scroll-container.lyrics-only {
-  padding-left: max(var(--space-6), env(safe-area-inset-left));
-  padding-right: max(var(--space-6), env(safe-area-inset-right));
+  padding-left: max(2.25rem, calc(env(safe-area-inset-left) + 0.75rem));
+  padding-right: max(2.25rem, calc(env(safe-area-inset-right) + 0.75rem));
 }
 .show-scroll-container.lyrics-only .cifra-content {
   font-family: var(--font-ui);

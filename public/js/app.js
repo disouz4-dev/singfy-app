@@ -1702,14 +1702,9 @@ function handleMidiToggle() {
       }
       if (result.transport === 'bluetooth') {
         showToast(`MIDI via Bluetooth (${result.device})`, 'success');
-        const dbg = MIDI_DEBUG ? document.getElementById('midi-debug') : null;
-        if (dbg) {
-          dbg.hidden = false;
-          dbg.textContent = 'MIDI conectado: ' + result.device + ' — verificando...';
-        }
         let st = '';
         try { st = await state.midi.bleNotifyStatus(); } catch (_) {}
-        if (dbg) dbg.textContent = 'MIDI conectado: ' + result.device + ' — ' + st;
+        startMidiSelfTest(`${result.device} — ${st}`);
       } else {
         const names = (result.inputs || []).slice(0, 3).join(', ');
         showToast(`MIDI: ${names || result.inputs.length + ' entrada'}`, 'success');
@@ -1740,10 +1735,43 @@ function fmtHex(u8) {
 // pisada mostrava um aviso e uma barra com os bytes recebidos)
 const MIDI_DEBUG = new URLSearchParams(location.search).has('midi-debug');
 
-function handleMidiPacket(u8, messages, label) {
-  if (!MIDI_DEBUG) return;
+// Depois de conectar, mostra uma barra por 25 s pedindo uma pisada de teste:
+// sem isso não dá para saber se o pedal está mudo ou se a mensagem chega e
+// não corresponde a nenhum comando.
+let midiSelfTest = null;
+
+function startMidiSelfTest(info) {
   const dbg = document.getElementById('midi-debug');
   if (!dbg) return;
+  if (midiSelfTest) clearTimeout(midiSelfTest.silence), clearTimeout(midiSelfTest.hide);
+  dbg.hidden = false;
+  dbg.textContent = `Pedal conectado (${info}). Pise num pedal para testar...`;
+  midiSelfTest = {
+    packets: 0,
+    silence: setTimeout(() => {
+      if (midiSelfTest && midiSelfTest.packets === 0) {
+        dbg.textContent = 'Pedal conectado, mas NENHUMA mensagem chegou. Troque o preset do pedal ou reconecte.';
+      }
+    }, 12000),
+    hide: setTimeout(() => { if (!MIDI_DEBUG) dbg.hidden = true; midiSelfTest = null; }, 25000)
+  };
+}
+
+function reportMidiActivity(text) {
+  const dbg = document.getElementById('midi-debug');
+  if (!dbg) return;
+  if (midiSelfTest) midiSelfTest.packets++;
+  if (MIDI_DEBUG || midiSelfTest) {
+    dbg.hidden = false;
+    dbg.textContent = text;
+  }
+}
+
+function handleMidiPacket(u8, messages, label) {
+  if (!MIDI_DEBUG && !midiSelfTest) return;
+  const dbg = document.getElementById('midi-debug');
+  if (!dbg) return;
+  if (midiSelfTest) midiSelfTest.packets++;
   const parts = [`${label || 'bt'} ${fmtHex(u8)}`];
   if (messages && messages.length) {
     parts.push('→ ' + messages.map((m) => fmtHex(Uint8Array.from(m))).join(' + '));
@@ -1766,6 +1794,7 @@ let lastUnmappedAt = 0;
 function handleMidiUnmapped(key) {
   if (Date.now() - lastUnmappedAt < 8000) return;
   lastUnmappedAt = Date.now();
+  reportMidiActivity(`Pedal recebido (${key}) — sem comando. Use "Mapear pedal".`);
   showToast(`Pedal recebido (${key || 'mensagem'}), mas sem comando. Use "Mapear pedal".`, 'warning');
 }
 
@@ -1805,6 +1834,7 @@ async function runMidiLearn() {
   const lastEl = overlay.querySelector('.midi-learn-last');
   const waitClick = (id) => new Promise(r => overlay.querySelector(id).addEventListener('click', () => r(id), { once: true }));
 
+  state.midi.onUnmapped = (key) => { lastEl.textContent = `recebido: ${key}`; };
   for (const action of MIDI_LEARN_ACTIONS) {
     stepEl.textContent = action.label;
     const result = await Promise.race([
@@ -1830,6 +1860,7 @@ async function runMidiLearn() {
       state.midi.setUserMap(map);
     }
   }
+  state.midi.onUnmapped = handleMidiUnmapped;
   overlay.remove();
   const n = Object.keys(map).length;
   showToast(n ? `Pedal mapeado (${n} botões)` : 'Nenhum botão mapeado', n ? 'success' : 'info');
@@ -1837,6 +1868,7 @@ async function runMidiLearn() {
 
 function handleMidiCommand(command) {
   state.lastMidiCommand = command || null;
+  reportMidiActivity(`Pedal OK: ${command}`);
   // Comandos MIDI só fazem sentido no show mode
   if (state.currentScreen !== 'show') return;
   switch (command) {
